@@ -40,9 +40,13 @@ import { useGoogleAuthStore } from '../../store/useGoogleAuthStore.js';
 import { getOrCreateFolder, uploadFileToFolder, getFilesInFolder } from '../../utils/googleDrive.js';
 import { renderMarkdown } from '../../utils/markdown.js';
 
-export default function NotesModal({ question, onClose }) {
+export default function NotesModal({ question, onClose, isConcept = false, concept = null }) {
+  const noteId = isConcept ? `concept_${concept.patternId}` : question.id;
+  const topicName = isConcept ? (concept.topicName || 'General') : (question.topic || 'General');
+  const folderName = isConcept ? (concept.patternName || 'Concept') : `${question.num || ''}. ${question.title || 'Untitled'}`;
+
   const saveNote = useNotesStore((s) => s.saveNote);
-  const existingNote = useNotesStore((s) => s.profiles[s.activeProfileId]?.[question.id]);
+  const existingNote = useNotesStore((s) => s.profiles[s.activeProfileId]?.[noteId]);
   const existing = existingNote || {};
 
   const [form, setForm] = useState({
@@ -165,19 +169,16 @@ export default function NotesModal({ question, onClose }) {
     setIsCreatingFolder(true);
     setGDriveError(null);
     try {
-      const topicName = question.topic || 'General';
-      const questionTitle = `${question.num || ''}. ${question.title || 'Untitled'}`;
-
       // 1. Get or Create "DSA Mastery" Root Folder
       const rootFolder = await getOrCreateFolder('DSA Mastery', null, accessToken);
       
       // 2. Get or Create Topic Folder
       const topicFolder = await getOrCreateFolder(topicName, rootFolder.id, accessToken);
       
-      // 3. Get or Create Problem Folder
-      const problemFolder = await getOrCreateFolder(questionTitle, topicFolder.id, accessToken);
+      // 3. Get or Create Folder (Concept or Problem)
+      const targetFolder = await getOrCreateFolder(folderName, topicFolder.id, accessToken);
 
-      const folderUrl = `https://drive.google.com/drive/folders/${problemFolder.id}`;
+      const folderUrl = `https://drive.google.com/drive/folders/${targetFolder.id}`;
       setForm((prev) => ({
         ...prev,
         googleDriveUrl: folderUrl
@@ -302,7 +303,7 @@ export default function NotesModal({ question, onClose }) {
   };
 
   const handleSave = () => {
-    saveNote(question.id, form);
+    saveNote(noteId, form);
     onClose();
   };
 
@@ -380,10 +381,10 @@ export default function NotesModal({ question, onClose }) {
           <div>
             <div className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <StickyNote size={18} style={{ color: 'var(--accent-primary)' }} />
-              Notes Editor
+              {isConcept ? 'Concept Notes Editor' : 'Notes Editor'}
             </div>
             <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>
-              {question.num}. {question.title}
+              {isConcept ? `Topic: ${topicName} | Concept: ${folderName}` : `${question.num}. ${question.title}`}
             </div>
           </div>
           <button className="modal-close" onClick={onClose} aria-label="Close modal"><X size={18} /></button>
@@ -671,7 +672,7 @@ export default function NotesModal({ question, onClose }) {
                       Setup Google Drive Folder
                     </h4>
                     <p style={{ margin: '0 0 24px 0', fontSize: '13px', color: 'var(--text-secondary)', maxWidth: '440px', lineHeight: 1.5 }}>
-                      Create a structured folder under <strong>DSA Mastery / {question.topic || 'General'} / {question.num}. {question.title}</strong> in your Google Drive automatically.
+                      Create a structured folder under <strong>DSA Mastery / {topicName} / {folderName}</strong> in your Google Drive automatically.
                     </p>
 
                     {gDriveError && (

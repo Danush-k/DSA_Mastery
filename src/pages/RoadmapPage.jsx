@@ -38,6 +38,7 @@ const CircleProgress = ({ pct = 0, size = 36, color = '#00b8a3', trackColor = 'r
 function ConceptCard({ step, allQuestions, questionStatus, bookmarks, notes }) {
   const [open, setOpen] = useState(false);
   const [activeNotesQuestion, setActiveNotesQuestion] = useState(null);
+  const [activeNotesConcept, setActiveNotesConcept] = useState(null);
   const pattern = patterns[step.patternId];
   const topic   = topics.find(t => t.id === step.topicId);
   const lc = LEVEL_CONFIG[step.level];
@@ -45,6 +46,10 @@ function ConceptCard({ step, allQuestions, questionStatus, bookmarks, notes }) {
   const toggleBookmark = useProgressStore((s) => s.toggleBookmark);
   const scheduleRevision = useRevisionStore((s) => s.scheduleRevision);
   const removeRevision = useRevisionStore((s) => s.removeRevision);
+
+  const conceptNotesKey = `concept_${step.patternId}`;
+  const conceptNote = notes[conceptNotesKey];
+  const hasConceptNote = conceptNote && Object.entries(conceptNote).some(([k, v]) => v && v !== '' && k !== 'updatedAt');
 
   const handleCheckClick = (qId, isSolved) => {
     if (!isSolved) {
@@ -128,6 +133,47 @@ function ConceptCard({ step, allQuestions, questionStatus, bookmarks, notes }) {
           >
             <YoutubeLogo size={20} />
           </a>
+
+          {/* Concept Notes Button */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setActiveNotesConcept({
+                patternId: step.patternId,
+                patternName: pattern?.name || step.patternId,
+                topicId: step.topicId,
+                topicName: topic?.name || step.topicId,
+              });
+            }}
+            className="lc-yt-btn"
+            title="Concept Notes & Drive Uploads"
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              color: hasConceptNote ? 'var(--accent-primary)' : 'var(--text-secondary)',
+              opacity: hasConceptNote ? 1 : 0.6,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
+              width: 28,
+              height: 28,
+              borderRadius: '50%',
+              transition: 'all 0.2s',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'var(--bg-tertiary)';
+              e.currentTarget.style.color = 'var(--accent-primary)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'none';
+              e.currentTarget.style.color = hasConceptNote ? 'var(--accent-primary)' : 'var(--text-secondary)';
+            }}
+          >
+            <StickyNote size={15} />
+          </button>
 
           {/* Chevron */}
           <span className="lc-chevron">{open ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</span>
@@ -254,6 +300,13 @@ function ConceptCard({ step, allQuestions, questionStatus, bookmarks, notes }) {
         <NotesModal 
           question={activeNotesQuestion} 
           onClose={() => setActiveNotesQuestion(null)} 
+        />
+      )}
+      {activeNotesConcept && (
+        <NotesModal 
+          isConcept={true}
+          concept={activeNotesConcept}
+          onClose={() => setActiveNotesConcept(null)} 
         />
       )}
     </div>

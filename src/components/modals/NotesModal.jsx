@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import {
   StickyNote,
@@ -23,9 +23,15 @@ import {
   Minimize2,
   FolderOpen,
   ExternalLink,
-  UploadCloud
+  UploadCloud,
+  CloudUpload,
+  CheckCircle,
+  RefreshCw,
+  AlertCircle
 } from 'lucide-react';
 import useNotesStore from '../../store/useNotesStore.js';
+import { useGoogleAuthStore } from '../../store/useGoogleAuthStore.js';
+import { getOrCreateFolder, uploadFileToFolder } from '../../utils/googleDrive.js';
 import { renderMarkdown } from '../../utils/markdown.js';
 
 export default function NotesModal({ question, onClose }) {
@@ -45,34 +51,109 @@ export default function NotesModal({ question, onClose }) {
   });
 
   const [urlInput, setUrlInput] = useState(existing.googleDriveUrl || '');
-  const [activeTab, setActiveTab] = useState('notes'); // Default tab is Additional Notes
+  const [activeTab, setActiveTab] = useState('notes'); // Default tab is Notes
   const [isPreview, setIsPreview] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
   const textareaRef = useRef(null);
 
+  // Google Auth integration
+  const accessToken = useGoogleAuthStore((s) => s.accessToken);
+  const isAuthorized = useGoogleAuthStore((s) => s.isAuthorized);
+  const setAccessToken = useGoogleAuthStore((s) => s.setAccessToken);
+
+  // Drive integration UI states
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [isCreatingFolder, setIsCreatingFolder] = useState(false);
+  const [uploadingFiles, setUploadingFiles] = useState({});
+  const [dragActive, setDragActive] = useState(false);
+  const [gDriveError, setGDriveError] = useState(null);
+  const [iframeKey, setIframeKey] = useState(0);
+
+  const tokenClientRef = useRef(null);
+
+  useEffect(() => {
+    if (window.google && !tokenClientRef.current) {
+      tokenClientRef.current = window.google.accounts.oauth2.initTokenClient({
+        client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID,
+        scope: 'https://www.googleapis.com/auth/drive.file',
+        callback: (tokenResponse) => {
+          setIsConnecting(false);
+          if (tokenResponse.error_description) {
+            setGDriveError(`Auth failed: ${tokenResponse.error_description}`);
+            return;
+          }
+          if (tokenResponse.access_token) {
+            setAccessToken(tokenResponse.access_token);
+            setGDriveError(null);
+          }
+        },
+        error_callback: (err) => {
+          setIsConnecting(false);
+          setGDriveError(`OAuth client error: ${err.message}`);
+        }
+      });
+    }
+  }, [setAccessToken]);
+
+  const handleConnectGDrive = () => {
+    if (tokenClientRef.current) {
+      setIsConnecting(true);
+      setGDriveError(null);
+      tokenClientRef.current.requestAccessToken({ prompt: 'consent' });
+    } else {
+      setGDriveError("Google OAuth client script failed to load. Please make sure you are online or try refreshing the page.");
+    }
+  };
+
+  const handleAutoCreateFolder = async () => {
+    if (!accessToken) return;
+    setIsCreatingFolder(true);
+    setGDriveError(null);
+    try {
+      const topicName = question.topic || 'General';
+      const questionTitle = `${question.num || ''}. ${question.title || 'Untitled'}`;
+
+      // 1. Get or Create "DSA Mastery" Root Folder
+      const rootFolder = await getOrCreateFolder('DSA Mastery', null, accessToken);
+      
+      // 2. Get or Create Topic Folder
+      const topicFolder = await getOrCreateFolder(topicName, rootFolder.id, accessToken);
+      
+      // 3. Get or Create Problem Folder
+      const problemFolder = await getOrCreateFolder(questionTitle, topicFolder.id, accessToken);
+
+      const folderUrl = `https://drive.google.com/drive/folders/${problemFolder.id}`;
+      setForm((prev) => ({
+        ...prev,
+        googleDriveUrl: folderUrl
+      }));
+      setUrlInput(folderUrl);
+    } catch (err) {
+      console.error("Auto-create folder failed:", err);
+      setGDriveError(`Auto-folder creation failed: ${err.message}`);
+    } finally {
+      setIsCreatingFolder(false);
+    }
+  };
+
   const getEmbeddableDriveUrl = (url) => {
     if (!url) return '';
-    // 1. Folders
     const folderMatch = url.match(/drive\.google\.com\/drive\/(?:u\/\d+\/)?folders\/([a-zA-Z0-9-_]+)/);
     if (folderMatch) {
       return `https://drive.google.com/embeddedfolderview?id=${folderMatch[1]}#grid`;
     }
-    // 2. Files
     const fileMatch = url.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9-_]+)/);
     if (fileMatch) {
       return `https://drive.google.com/file/d/${fileMatch[1]}/preview`;
     }
-    // 3. Docs
     const docMatch = url.match(/docs\.google\.com\/document\/d\/([a-zA-Z0-9-_]+)/);
     if (docMatch) {
       return `https://docs.google.com/document/d/${docMatch[1]}/preview`;
     }
-    // 4. Sheets
     const sheetMatch = url.match(/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
     if (sheetMatch) {
       return `https://docs.google.com/spreadsheets/d/${sheetMatch[1]}/preview`;
     }
-    // 5. Slides
     const slideMatch = url.match(/docs\.google\.com\/presentation\/d\/([a-zA-Z0-9-_]+)/);
     if (slideMatch) {
       return `https://docs.google.com/presentation/d/${slideMatch[1]}/embed`;
@@ -104,6 +185,66 @@ export default function NotesModal({ question, onClose }) {
       ...prev,
       googleDriveUrl: ''
     }));
+  };
+
+  const handleDrag = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setDragActive(true);
+    } else if (e.type === "dragleave") {
+      setDragActive(false);
+    }
+  };
+
+  const getFolderIdFromUrl = (url) => {
+    if (!url) return null;
+    const match = url.match(/drive\.google\.com\/drive\/(?:u\/\d+\/)?folders\/([a-zA-Z0-9-_]+)/);
+    return match ? match[1] : null;
+  };
+
+  const handleDrop = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      await handleUploadFiles(e.dataTransfer.files);
+    }
+  };
+
+  const handleFileSelect = async (e) => {
+    if (e.target.files && e.target.files.length > 0) {
+      await handleUploadFiles(e.target.files);
+    }
+  };
+
+  const handleUploadFiles = async (filesList) => {
+    const folderId = getFolderIdFromUrl(form.googleDriveUrl);
+    if (!folderId || !accessToken) {
+      setGDriveError("Google Drive is not linked or not authorized.");
+      return;
+    }
+    setGDriveError(null);
+    for (let i = 0; i < filesList.length; i++) {
+      const file = filesList[i];
+      setUploadingFiles((prev) => ({ ...prev, [file.name]: 'uploading' }));
+      try {
+        await uploadFileToFolder(file, folderId, accessToken);
+        setUploadingFiles((prev) => ({ ...prev, [file.name]: 'success' }));
+        setTimeout(() => {
+          setUploadingFiles((prev) => {
+            const next = { ...prev };
+            delete next[file.name];
+            return next;
+          });
+        }, 3000);
+        setIframeKey((prev) => prev + 1);
+      } catch (err) {
+        console.error("Upload failed for file: " + file.name, err);
+        setUploadingFiles((prev) => ({ ...prev, [file.name]: 'error' }));
+        setGDriveError(`Upload failed for ${file.name}: ${err.message}`);
+      }
+    }
   };
 
   const handleSave = () => {
@@ -310,7 +451,118 @@ export default function NotesModal({ question, onClose }) {
             {/* Markdown editor area / Google Drive Embedder */}
             <div className="markdown-editor-wrapper">
               {activeTab === 'googleDrive' ? (
-                !form.googleDriveUrl ? (
+                !isAuthorized && !form.googleDriveUrl ? (
+                  /* 1. Unauthenticated Setup State */
+                  <div style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '40px 20px',
+                    textAlign: 'center',
+                    flex: 1,
+                    background: 'rgba(255, 255, 255, 0.01)',
+                  }}>
+                    <div style={{
+                      width: '60px',
+                      height: '60px',
+                      borderRadius: '50%',
+                      background: 'rgba(59, 130, 246, 0.08)',
+                      border: '1px solid rgba(59, 130, 246, 0.25)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      marginBottom: '20px',
+                      color: 'var(--accent-secondary)',
+                      boxShadow: '0 4px 12px rgba(59, 130, 246, 0.1)'
+                    }}>
+                      <FolderOpen size={30} />
+                    </div>
+                    <h4 style={{ margin: '0 0 8px 0', fontSize: '16px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                      Connect Google Drive
+                    </h4>
+                    <p style={{ margin: '0 0 24px 0', fontSize: '13px', color: 'var(--text-secondary)', maxWidth: '440px', lineHeight: 1.5 }}>
+                      Authenticate with your Google account to automatically create structured folders for each topic/problem and upload study materials directly.
+                    </p>
+
+                    {gDriveError && (
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        background: 'rgba(239, 68, 68, 0.08)',
+                        border: '1px solid rgba(239, 68, 68, 0.2)',
+                        borderRadius: '6px',
+                        padding: '8px 16px',
+                        color: '#EF4444',
+                        fontSize: '12px',
+                        marginBottom: '16px',
+                        maxWidth: '440px',
+                      }}>
+                        <AlertCircle size={14} style={{ flexShrink: 0 }} />
+                        <span>{gDriveError}</span>
+                      </div>
+                    )}
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', width: '100%', alignItems: 'center' }}>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={handleConnectGDrive}
+                        disabled={isConnecting}
+                        style={{ padding: '0 24px', height: '40px', display: 'flex', alignItems: 'center', gap: '8px' }}
+                      >
+                        {isConnecting ? (
+                          <>
+                            <RefreshCw size={14} className="spin" style={{ animation: 'spin 1s linear infinite' }} />
+                            Connecting...
+                          </>
+                        ) : (
+                          "Connect Google Drive"
+                        )}
+                      </button>
+
+                      <div style={{ display: 'flex', alignItems: 'center', width: '80%', maxWidth: '360px', margin: '8px 0' }}>
+                        <div style={{ flex: 1, height: '1px', background: 'var(--border-primary)' }} />
+                        <span style={{ fontSize: '11px', color: 'var(--text-tertiary)', padding: '0 10px' }}>OR LINK MANUALLY</span>
+                        <div style={{ flex: 1, height: '1px', background: 'var(--border-primary)' }} />
+                      </div>
+
+                      <div style={{
+                        display: 'flex',
+                        gap: '10px',
+                        width: '100%',
+                        maxWidth: '440px'
+                      }}>
+                        <input
+                          type="text"
+                          placeholder="Paste custom folder/document URL"
+                          value={urlInput}
+                          onChange={(e) => setUrlInput(e.target.value)}
+                          style={{
+                            flex: 1,
+                            padding: '10px 14px',
+                            background: 'var(--bg-tertiary)',
+                            border: '1px solid var(--border-secondary)',
+                            borderRadius: 'var(--radius-md)',
+                            color: 'var(--text-primary)',
+                            fontSize: '13px',
+                            outline: 'none',
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={handleEmbed}
+                          style={{ padding: '0 16px', height: '40px' }}
+                        >
+                          Link
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : isAuthorized && !form.googleDriveUrl ? (
+                  /* 2. Authenticated But Unlinked State (Auto-creation Pane) */
                   <div style={{
                     display: 'flex',
                     flexDirection: 'column',
@@ -334,69 +586,93 @@ export default function NotesModal({ question, onClose }) {
                       color: 'var(--accent-primary)',
                       boxShadow: '0 4px 12px rgba(139, 92, 246, 0.1)'
                     }}>
-                      <FolderOpen size={30} />
+                      <UploadCloud size={30} />
                     </div>
                     <h4 style={{ margin: '0 0 8px 0', fontSize: '16px', fontWeight: 600, color: 'var(--text-primary)' }}>
-                      Embed Google Drive File or Folder
+                      Setup Google Drive Folder
                     </h4>
                     <p style={{ margin: '0 0 24px 0', fontSize: '13px', color: 'var(--text-secondary)', maxWidth: '440px', lineHeight: 1.5 }}>
-                      Paste a Google Docs, Sheets, Slides, PDF, or Folder share link. You can interact with it directly inside this sheet.
+                      Create a structured folder under <strong>DSA Mastery / {question.topic || 'General'} / {question.num}. {question.title}</strong> in your Google Drive automatically.
                     </p>
-                    <div style={{
-                      display: 'flex',
-                      gap: '10px',
-                      width: '100%',
-                      maxWidth: '480px',
-                      marginBottom: '16px'
-                    }}>
-                      <input
-                        type="text"
-                        placeholder="e.g. https://docs.google.com/document/d/..."
-                        value={urlInput}
-                        onChange={(e) => setUrlInput(e.target.value)}
-                        style={{
-                          flex: 1,
-                          padding: '10px 14px',
-                          background: 'var(--bg-tertiary)',
-                          border: '1px solid var(--border-secondary)',
-                          borderRadius: 'var(--radius-md)',
-                          color: 'var(--text-primary)',
-                          fontSize: '13px',
-                          outline: 'none',
-                          transition: 'border-color var(--transition-fast)'
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            handleEmbed();
-                          }
-                        }}
-                      />
+
+                    {gDriveError && (
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        background: 'rgba(239, 68, 68, 0.08)',
+                        border: '1px solid rgba(239, 68, 68, 0.2)',
+                        borderRadius: '6px',
+                        padding: '8px 16px',
+                        color: '#EF4444',
+                        fontSize: '12px',
+                        marginBottom: '16px',
+                        maxWidth: '440px',
+                      }}>
+                        <AlertCircle size={14} style={{ flexShrink: 0 }} />
+                        <span>{gDriveError}</span>
+                      </div>
+                    )}
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', width: '100%', alignItems: 'center' }}>
                       <button
                         type="button"
                         className="btn btn-primary"
-                        onClick={handleEmbed}
-                        style={{ padding: '0 20px', height: '40px' }}
+                        onClick={handleAutoCreateFolder}
+                        disabled={isCreatingFolder}
+                        style={{ padding: '0 24px', height: '40px', display: 'flex', alignItems: 'center', gap: '8px' }}
                       >
-                        Embed
+                        {isCreatingFolder ? (
+                          <>
+                            <RefreshCw size={14} className="spin" style={{ animation: 'spin 1s linear infinite' }} />
+                            Creating Folders...
+                          </>
+                        ) : (
+                          "Create & Link Google Drive Folder"
+                        )}
                       </button>
-                    </div>
-                    <div style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      fontSize: '11px',
-                      color: 'var(--text-tertiary)',
-                      background: 'var(--bg-tertiary)',
-                      padding: '8px 12px',
-                      borderRadius: '6px',
-                      border: '1px solid var(--border-primary)',
-                      maxWidth: '480px',
-                    }}>
-                      <Info size={12} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
-                      <span>Make sure sharing is set to "Anyone with the link can view".</span>
+
+                      <div style={{ display: 'flex', alignItems: 'center', width: '80%', maxWidth: '360px', margin: '8px 0' }}>
+                        <div style={{ flex: 1, height: '1px', background: 'var(--border-primary)' }} />
+                        <span style={{ fontSize: '11px', color: 'var(--text-tertiary)', padding: '0 10px' }}>OR PASTE CUSTOM LINK</span>
+                        <div style={{ flex: 1, height: '1px', background: 'var(--border-primary)' }} />
+                      </div>
+
+                      <div style={{
+                        display: 'flex',
+                        gap: '10px',
+                        width: '100%',
+                        maxWidth: '440px'
+                      }}>
+                        <input
+                          type="text"
+                          placeholder="Paste custom folder/document URL"
+                          value={urlInput}
+                          onChange={(e) => setUrlInput(e.target.value)}
+                          style={{
+                            flex: 1,
+                            padding: '10px 14px',
+                            background: 'var(--bg-tertiary)',
+                            border: '1px solid var(--border-secondary)',
+                            borderRadius: 'var(--radius-md)',
+                            color: 'var(--text-primary)',
+                            fontSize: '13px',
+                            outline: 'none',
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={handleEmbed}
+                          style={{ padding: '0 16px', height: '40px' }}
+                        >
+                          Link
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ) : (
+                  /* 3. Linked View State (Iframe + Upload Zone side-by-side or stacked) */
                   <div style={{ display: 'flex', flexDirection: 'column', flex: 1, height: '100%' }}>
                     {/* Header toolbar for Google Drive control */}
                     <div style={{
@@ -412,11 +688,11 @@ export default function NotesModal({ question, onClose }) {
                           width: '8px',
                           height: '8px',
                           borderRadius: '50%',
-                          background: '#10B981', // green dot indicating active/connected
+                          background: '#10B981',
                           boxShadow: '0 0 8px #10B981',
                         }} />
                         <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          Embedded: {getDriveTypeLabel(form.googleDriveUrl)}
+                          Linked: {getDriveTypeLabel(form.googleDriveUrl)}
                         </span>
                       </div>
                       
@@ -484,25 +760,184 @@ export default function NotesModal({ question, onClose }) {
                       </div>
                     </div>
 
-                    {/* Iframe preview */}
+                    {gDriveError && (
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        background: 'rgba(239, 68, 68, 0.08)',
+                        borderBottom: '1px solid rgba(239, 68, 68, 0.2)',
+                        color: '#EF4444',
+                        fontSize: '11.5px',
+                        padding: '6px 16px',
+                        margin: 0,
+                      }}>
+                        <AlertCircle size={12} style={{ flexShrink: 0 }} />
+                        <span>{gDriveError}</span>
+                      </div>
+                    )}
+
+                    {/* Main content split panel */}
                     <div style={{
+                      display: 'flex',
+                      flexDirection: isMaximized ? 'row' : 'column',
                       flex: 1,
-                      position: 'relative',
-                      background: '#14141d',
-                      minHeight: '350px',
-                      height: isMaximized ? 'calc(100vh - 180px)' : '400px',
+                      minHeight: 0,
                     }}>
-                      <iframe
-                        src={getEmbeddableDriveUrl(form.googleDriveUrl)}
-                        title="Google Drive Document Embed"
-                        width="100%"
-                        height="100%"
-                        style={{
-                          border: 'none',
-                          background: '#14141d',
-                        }}
-                        allow="autoplay"
-                      />
+                      {/* Iframe preview */}
+                      <div style={{
+                        flex: 2,
+                        position: 'relative',
+                        background: '#14141d',
+                        height: isMaximized ? 'calc(100vh - 180px)' : '350px',
+                        borderRight: isMaximized ? '1px solid var(--border-primary)' : 'none',
+                        borderBottom: isMaximized ? 'none' : '1px solid var(--border-primary)',
+                      }}>
+                        <iframe
+                          key={iframeKey}
+                          src={getEmbeddableDriveUrl(form.googleDriveUrl)}
+                          title="Google Drive Document Embed"
+                          width="100%"
+                          height="100%"
+                          style={{
+                            border: 'none',
+                            background: '#14141d',
+                          }}
+                          allow="autoplay"
+                        />
+                      </div>
+
+                      {/* Right Panel (Upload Area / Session State) */}
+                      <div style={{
+                        flex: 1,
+                        padding: '16px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justifyContent: 'space-between',
+                        background: 'rgba(255, 255, 255, 0.005)',
+                        maxWidth: isMaximized ? '280px' : 'none',
+                        minHeight: isMaximized ? 'none' : '140px',
+                      }}>
+                        {isAuthorized ? (
+                          /* Drag & Drop Upload Zone */
+                          <div style={{ display: 'flex', flexDirection: 'column', flex: 1, justifyContent: 'space-between' }}>
+                            <div
+                              onDragEnter={handleDrag}
+                              onDragOver={handleDrag}
+                              onDragLeave={handleDrag}
+                              onDrop={handleDrop}
+                              style={{
+                                flex: 1,
+                                border: dragActive ? '2px dashed var(--accent-primary)' : '2px dashed var(--border-secondary)',
+                                borderRadius: 'var(--radius-md)',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                textAlign: 'center',
+                                padding: '16px',
+                                background: dragActive ? 'rgba(139, 92, 246, 0.04)' : 'transparent',
+                                transition: 'all 0.2s',
+                                cursor: 'pointer',
+                              }}
+                              onClick={() => document.getElementById('gdrive-file-input').click()}
+                            >
+                              <CloudUpload size={24} style={{ color: dragActive ? 'var(--accent-primary)' : 'var(--text-tertiary)', marginBottom: '8px' }} />
+                              <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                                Drag & Drop notes here
+                              </span>
+                              <span style={{ fontSize: '9px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
+                                or click to select file
+                              </span>
+                              <input
+                                type="file"
+                                id="gdrive-file-input"
+                                multiple
+                                style={{ display: 'none' }}
+                                onChange={handleFileSelect}
+                              />
+                            </div>
+
+                            {/* Active uploads queue */}
+                            {Object.keys(uploadingFiles).length > 0 && (
+                              <div style={{
+                                marginTop: '12px',
+                                background: 'var(--bg-tertiary)',
+                                border: '1px solid var(--border-primary)',
+                                borderRadius: '6px',
+                                padding: '8px 12px',
+                                maxHeight: '110px',
+                                overflowY: 'auto',
+                              }}>
+                                <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                  Upload Queue
+                                </span>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                  {Object.entries(uploadingFiles).map(([filename, status]) => (
+                                    <div key={filename} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '11px', gap: '8px' }}>
+                                      <span style={{ color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                                        {filename}
+                                      </span>
+                                      <span style={{
+                                        flexShrink: 0,
+                                        fontSize: '9px',
+                                        fontWeight: 700,
+                                        color: status === 'success' ? '#10B981' : status === 'error' ? '#EF4444' : 'var(--accent-primary)',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '3px'
+                                      }}>
+                                        {status === 'success' && <CheckCircle size={10} />}
+                                        {status === 'error' && <AlertCircle size={10} />}
+                                        {status === 'uploading' && <RefreshCw size={10} className="spin" style={{ animation: 'spin 1s linear infinite' }} />}
+                                        {status}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          /* Prompt to Connect Google Drive for upload capabilities */
+                          <div style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            flex: 1,
+                            border: '1px solid var(--border-primary)',
+                            borderRadius: 'var(--radius-md)',
+                            padding: '16px',
+                            background: 'rgba(255, 255, 255, 0.005)',
+                            textAlign: 'center',
+                          }}>
+                            <Info size={16} style={{ color: 'var(--accent-primary)', marginBottom: '8px' }} />
+                            <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                              uploads disabled
+                            </span>
+                            <p style={{ fontSize: '10px', color: 'var(--text-tertiary)', margin: '0 0 12px 0', lineHeight: 1.4 }}>
+                              Connect your Google Drive account to enable drag & drop file uploads.
+                            </p>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              onClick={handleConnectGDrive}
+                              disabled={isConnecting}
+                              style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', padding: '4px 12px' }}
+                            >
+                              {isConnecting ? (
+                                <>
+                                  <RefreshCw size={10} className="spin" style={{ animation: 'spin 1s linear infinite' }} />
+                                  Connecting...
+                                </>
+                              ) : (
+                                "Connect Account"
+                              )}
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )
@@ -635,4 +1070,3 @@ export default function NotesModal({ question, onClose }) {
     document.body
   );
 }
-

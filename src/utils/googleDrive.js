@@ -122,3 +122,25 @@ export async function uploadFileToFolder(file, folderId, accessToken) {
 
   return await response.json();
 }
+
+/**
+ * Lists all files inside a specific Google Drive folder.
+ */
+export async function getFilesInFolder(folderId, accessToken) {
+  const query = `'${folderId}' in parents and trashed = false`;
+  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name,mimeType,thumbnailLink,iconLink,webViewLink)&orderBy=name`;
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to list files in folder: ${errorText}`);
+  }
+
+  const data = await response.json();
+  return data.files || [];
+}
+

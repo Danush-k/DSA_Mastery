@@ -27,11 +27,17 @@ import {
   CloudUpload,
   CheckCircle,
   RefreshCw,
-  AlertCircle
+  AlertCircle,
+  FileSpreadsheet,
+  FileCode,
+  FileImage,
+  ChevronLeft,
+  File,
+  FileText
 } from 'lucide-react';
 import useNotesStore from '../../store/useNotesStore.js';
 import { useGoogleAuthStore } from '../../store/useGoogleAuthStore.js';
-import { getOrCreateFolder, uploadFileToFolder } from '../../utils/googleDrive.js';
+import { getOrCreateFolder, uploadFileToFolder, getFilesInFolder } from '../../utils/googleDrive.js';
 import { renderMarkdown } from '../../utils/markdown.js';
 
 export default function NotesModal({ question, onClose }) {
@@ -68,6 +74,11 @@ export default function NotesModal({ question, onClose }) {
   const [dragActive, setDragActive] = useState(false);
   const [gDriveError, setGDriveError] = useState(null);
   const [iframeKey, setIframeKey] = useState(0);
+
+  // Native files list states
+  const [folderFiles, setFolderFiles] = useState([]);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [isLoadingFiles, setIsLoadingFiles] = useState(false);
 
   const tokenClientRef = useRef(null);
 
@@ -107,6 +118,37 @@ export default function NotesModal({ question, onClose }) {
     }
   }, [setAccessToken, form.googleDriveUrl]);
 
+  // Fetch files when folder is connected or changed
+  useEffect(() => {
+    if (isAuthorized && form.googleDriveUrl && form.googleDriveUrl.includes('folders')) {
+      fetchFiles();
+    }
+  }, [isAuthorized, form.googleDriveUrl, accessToken]);
+
+  const getFolderIdFromUrl = (url) => {
+    if (!url) return null;
+    const match = url.match(/drive\.google\.com\/drive\/(?:u\/\d+\/)?folders\/([a-zA-Z0-9-_]+)/);
+    return match ? match[1] : null;
+  };
+
+  const fetchFiles = async (urlOverride) => {
+    const targetUrl = urlOverride || form.googleDriveUrl;
+    const folderId = getFolderIdFromUrl(targetUrl);
+    if (!folderId || !accessToken) return;
+
+    setIsLoadingFiles(true);
+    setGDriveError(null);
+    try {
+      const files = await getFilesInFolder(folderId, accessToken);
+      setFolderFiles(files);
+    } catch (err) {
+      console.error("Failed to list files:", err);
+      setGDriveError(`Failed to load folder contents: ${err.message}`);
+    } finally {
+      setIsLoadingFiles(false);
+    }
+  };
+
   const handleConnectGDrive = () => {
     if (tokenClientRef.current) {
       setIsConnecting(true);
@@ -140,6 +182,7 @@ export default function NotesModal({ question, onClose }) {
         googleDriveUrl: folderUrl
       }));
       setUrlInput(folderUrl);
+      fetchFiles(folderUrl);
     } catch (err) {
       console.error("Auto-create folder failed:", err);
       setGDriveError(`Auto-folder creation failed: ${err.message}`);
@@ -193,6 +236,8 @@ export default function NotesModal({ question, onClose }) {
 
   const handleDisconnect = () => {
     setUrlInput('');
+    setSelectedFile(null);
+    setFolderFiles([]);
     setForm((prev) => ({
       ...prev,
       googleDriveUrl: ''
@@ -207,12 +252,6 @@ export default function NotesModal({ question, onClose }) {
     } else if (e.type === "dragleave") {
       setDragActive(false);
     }
-  };
-
-  const getFolderIdFromUrl = (url) => {
-    if (!url) return null;
-    const match = url.match(/drive\.google\.com\/drive\/(?:u\/\d+\/)?folders\/([a-zA-Z0-9-_]+)/);
-    return match ? match[1] : null;
   };
 
   const handleDrop = async (e) => {
@@ -250,6 +289,8 @@ export default function NotesModal({ question, onClose }) {
             return next;
           });
         }, 3000);
+        // Refresh native file explorer list
+        fetchFiles();
         setIframeKey((prev) => prev + 1);
       } catch (err) {
         console.error("Upload failed for file: " + file.name, err);
@@ -705,22 +746,44 @@ export default function NotesModal({ question, onClose }) {
                       borderBottom: '1px solid var(--border-primary)',
                     }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-                        <div style={{
-                          width: '8px',
-                          height: '8px',
-                          borderRadius: '50%',
-                          background: '#10B981',
-                          boxShadow: '0 0 8px #10B981',
-                        }} />
+                        {selectedFile ? (
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => setSelectedFile(null)}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '2px 8px',
+                              fontSize: '11px',
+                              height: '24px',
+                              border: '1px solid var(--border-secondary)',
+                              background: 'transparent',
+                              color: 'var(--text-secondary)'
+                            }}
+                          >
+                            <ChevronLeft size={14} />
+                            Back to files
+                          </button>
+                        ) : (
+                          <div style={{
+                            width: '8px',
+                            height: '8px',
+                            borderRadius: '50%',
+                            background: '#10B981',
+                            boxShadow: '0 0 8px #10B981',
+                          }} />
+                        )}
                         <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          Linked: {getDriveTypeLabel(form.googleDriveUrl)}
+                          {selectedFile ? `Viewing: ${selectedFile.name}` : `Linked: ${getDriveTypeLabel(form.googleDriveUrl)}`}
                         </span>
                       </div>
                       
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-                        {form.googleDriveUrl.includes('folders') && (
+                        {selectedFile ? (
                           <a
-                            href={form.googleDriveUrl}
+                            href={selectedFile.webViewLink}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="btn btn-secondary btn-sm"
@@ -732,38 +795,61 @@ export default function NotesModal({ question, onClose }) {
                               padding: '4px 10px',
                               fontSize: '11px',
                               height: '28px',
-                              borderColor: 'rgba(139, 92, 246, 0.4)',
-                              color: 'var(--accent-primary)',
-                            }}
-                            onMouseEnter={(e) => {
-                              e.currentTarget.style.background = 'rgba(139, 92, 246, 0.08)';
-                            }}
-                            onMouseLeave={(e) => {
-                              e.currentTarget.style.background = 'var(--bg-tertiary)';
                             }}
                           >
-                            <UploadCloud size={12} />
-                            Upload Files
+                            <ExternalLink size={12} />
+                            Open in Drive
                           </a>
+                        ) : (
+                          <>
+                            {form.googleDriveUrl.includes('folders') && (
+                              <a
+                                href={form.googleDriveUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="btn btn-secondary btn-sm"
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '6px',
+                                  textDecoration: 'none',
+                                  padding: '4px 10px',
+                                  fontSize: '11px',
+                                  height: '28px',
+                                  borderColor: 'rgba(139, 92, 246, 0.4)',
+                                  color: 'var(--accent-primary)',
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.background = 'rgba(139, 92, 246, 0.08)';
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.background = 'var(--bg-tertiary)';
+                                }}
+                              >
+                                <UploadCloud size={12} />
+                                Upload Files
+                              </a>
+                            )}
+                            <a
+                              href={form.googleDriveUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="btn btn-secondary btn-sm"
+                              style={{
+                                display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '6px',
+                                  textDecoration: 'none',
+                                  padding: '4px 10px',
+                                  fontSize: '11px',
+                                  height: '28px',
+                              }}
+                            >
+                              <ExternalLink size={12} />
+                              Open
+                            </a>
+                          </>
                         )}
-                        <a
-                          href={form.googleDriveUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="btn btn-secondary btn-sm"
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '6px',
-                            textDecoration: 'none',
-                            padding: '4px 10px',
-                            fontSize: '11px',
-                            height: '28px',
-                          }}
-                        >
-                          <ExternalLink size={12} />
-                          Open
-                        </a>
                         <button
                           type="button"
                           className="btn btn-secondary btn-sm"
@@ -798,14 +884,15 @@ export default function NotesModal({ question, onClose }) {
                       </div>
                     )}
 
-                    {/* Main content split panel */}
+                    {/* Main content grid */}
                     <div style={{
                       display: 'flex',
                       flexDirection: isMaximized ? 'row' : 'column',
                       flex: 1,
                       minHeight: 0,
                     }}>
-                      {/* Iframe preview */}
+                      
+                      {/* Left Pane (File list OR Iframe preview) */}
                       <div style={{
                         flex: 2,
                         position: 'relative',
@@ -813,19 +900,133 @@ export default function NotesModal({ question, onClose }) {
                         height: isMaximized ? 'calc(100vh - 180px)' : '350px',
                         borderRight: isMaximized ? '1px solid var(--border-primary)' : 'none',
                         borderBottom: isMaximized ? 'none' : '1px solid var(--border-primary)',
+                        display: 'flex',
+                        flexDirection: 'column',
                       }}>
-                        <iframe
-                          key={iframeKey}
-                          src={getEmbeddableDriveUrl(form.googleDriveUrl)}
-                          title="Google Drive Document Embed"
-                          width="100%"
-                          height="100%"
-                          style={{
-                            border: 'none',
-                            background: '#14141d',
-                          }}
-                          allow="autoplay"
-                        />
+                        {selectedFile ? (
+                          /* Iframe displaying active file preview */
+                          <iframe
+                            key={selectedFile.id + iframeKey}
+                            src={getEmbeddableDriveUrl(selectedFile.webViewLink)}
+                            title="Google Drive Document Embed"
+                            width="100%"
+                            height="100%"
+                            style={{
+                              border: 'none',
+                              background: '#14141d',
+                              flex: 1,
+                            }}
+                            allow="autoplay"
+                          />
+                        ) : isAuthorized ? (
+                          /* Custom Native folder explorer */
+                          <div style={{ padding: '16px', overflowY: 'auto', flex: 1 }}>
+                            {isLoadingFiles ? (
+                              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: '10px' }}>
+                                <RefreshCw size={24} className="spin" style={{ color: 'var(--accent-primary)', animation: 'spin 1s linear infinite' }} />
+                                <span style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>Loading folder contents...</span>
+                              </div>
+                            ) : folderFiles.length === 0 ? (
+                              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-tertiary)', padding: '20px' }}>
+                                <FolderOpen size={36} style={{ color: 'var(--text-tertiary)', marginBottom: '12px', opacity: 0.5 }} />
+                                <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>This folder is empty</span>
+                                <span style={{ fontSize: '11px', marginTop: '4px', textAlign: 'center' }}>Drag and drop files to the upload box on the right to get started!</span>
+                              </div>
+                            ) : (
+                              <div style={{
+                                display: 'grid',
+                                gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))',
+                                gap: '12px',
+                              }}>
+                                {folderFiles.map((file) => {
+                                  // Determine type specific color and icon
+                                  let FileIcon = File;
+                                  let iconColor = 'var(--text-secondary)';
+                                  
+                                  if (file.mimeType.includes('document')) {
+                                    FileIcon = FileText;
+                                    iconColor = '#4285F4'; // Docs blue
+                                  } else if (file.mimeType.includes('spreadsheet')) {
+                                    FileIcon = FileSpreadsheet;
+                                    iconColor = '#0F9D58'; // Sheets green
+                                  } else if (file.mimeType.includes('presentation')) {
+                                    FileIcon = FileCode;
+                                    iconColor = '#F4B400'; // Slides yellow
+                                  } else if (file.mimeType === 'application/pdf') {
+                                    FileIcon = FileText;
+                                    iconColor = '#DB4437'; // PDF red
+                                  } else if (file.mimeType.startsWith('image/')) {
+                                    FileIcon = FileImage;
+                                    iconColor = '#FF7043'; // Image orange
+                                  }
+                                  
+                                  return (
+                                    <div
+                                      key={file.id}
+                                      onClick={() => setSelectedFile(file)}
+                                      style={{
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        alignItems: 'center',
+                                        padding: '12px 8px',
+                                        background: 'var(--bg-tertiary)',
+                                        border: '1px solid var(--border-primary)',
+                                        borderRadius: 'var(--radius-md)',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.2s',
+                                        textAlign: 'center',
+                                        height: '100px',
+                                        justifyContent: 'space-between',
+                                      }}
+                                      onMouseEnter={(e) => {
+                                        e.currentTarget.style.borderColor = 'var(--accent-primary)';
+                                        e.currentTarget.style.transform = 'translateY(-2px)';
+                                        e.currentTarget.style.background = 'var(--bg-card-hover)';
+                                      }}
+                                      onMouseLeave={(e) => {
+                                        e.currentTarget.style.borderColor = 'var(--border-primary)';
+                                        e.currentTarget.style.transform = 'none';
+                                        e.currentTarget.style.background = 'var(--bg-tertiary)';
+                                      }}
+                                    >
+                                      <FileIcon size={32} style={{ color: iconColor, marginBottom: '6px' }} />
+                                      <span
+                                        title={file.name}
+                                        style={{
+                                          fontSize: '11px',
+                                          fontWeight: 500,
+                                          color: 'var(--text-primary)',
+                                          width: '100%',
+                                          overflow: 'hidden',
+                                          textOverflow: 'ellipsis',
+                                          whiteSpace: 'nowrap',
+                                          padding: '0 4px',
+                                        }}
+                                      >
+                                        {file.name}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          /* Fallback view (manually linked folder iframe) */
+                          <iframe
+                            key={iframeKey}
+                            src={getEmbeddableDriveUrl(form.googleDriveUrl)}
+                            title="Google Drive Document Embed"
+                            width="100%"
+                            height="100%"
+                            style={{
+                              border: 'none',
+                              background: '#14141d',
+                              flex: 1,
+                            }}
+                            allow="autoplay"
+                          />
+                        )}
                       </div>
 
                       {/* Right Panel (Upload Area / Session State) */}

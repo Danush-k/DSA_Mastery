@@ -22,7 +22,8 @@ import {
   Maximize2,
   Minimize2,
   FolderOpen,
-  ExternalLink
+  ExternalLink,
+  UploadCloud
 } from 'lucide-react';
 import useNotesStore from '../../store/useNotesStore.js';
 import { renderMarkdown } from '../../utils/markdown.js';
@@ -420,6 +421,34 @@ export default function NotesModal({ question, onClose }) {
                       </div>
                       
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                        {form.googleDriveUrl.includes('folders') && (
+                          <a
+                            href={form.googleDriveUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="btn btn-secondary btn-sm"
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              textDecoration: 'none',
+                              padding: '4px 10px',
+                              fontSize: '11px',
+                              height: '28px',
+                              borderColor: 'rgba(139, 92, 246, 0.4)',
+                              color: 'var(--accent-primary)',
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.background = 'rgba(139, 92, 246, 0.08)';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.background = 'var(--bg-tertiary)';
+                            }}
+                          >
+                            <UploadCloud size={12} />
+                            Upload Files
+                          </a>
+                        )}
                         <a
                           href={form.googleDriveUrl}
                           target="_blank"

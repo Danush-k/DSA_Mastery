@@ -144,6 +144,7 @@ export function initDbSync(onStatusChange) {
           note: noteData?.notes || '',
           code: noteData?.code || '',
           why: noteData?.why || '',
+          googleDriveUrl: noteData?.googleDriveUrl || '',
           updatedAt: new Date().toISOString()
         });
       }
@@ -413,6 +414,7 @@ async function hydrateFromCloud(user) {
         interviewLearnings: row.interviewLearnings || '',
         code: row.code || '',
         why: row.why || '',
+        googleDriveUrl: row.googleDriveUrl || '',
         updatedAt: row.updatedAt
       };
     });

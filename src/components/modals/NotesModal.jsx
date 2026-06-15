@@ -20,7 +20,9 @@ import {
   Image,
   Eye,
   Maximize2,
-  Minimize2
+  Minimize2,
+  FolderOpen,
+  ExternalLink
 } from 'lucide-react';
 import useNotesStore from '../../store/useNotesStore.js';
 import { renderMarkdown } from '../../utils/markdown.js';
@@ -38,12 +40,70 @@ export default function NotesModal({ question, onClose }) {
     spaceComplexity: existing.spaceComplexity || '',
     notes: existing.notes || '',
     interviewLearnings: existing.interviewLearnings || '',
+    googleDriveUrl: existing.googleDriveUrl || '',
   });
 
+  const [urlInput, setUrlInput] = useState(existing.googleDriveUrl || '');
   const [activeTab, setActiveTab] = useState('notes'); // Default tab is Additional Notes
   const [isPreview, setIsPreview] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
   const textareaRef = useRef(null);
+
+  const getEmbeddableDriveUrl = (url) => {
+    if (!url) return '';
+    // 1. Folders
+    const folderMatch = url.match(/drive\.google\.com\/drive\/(?:u\/\d+\/)?folders\/([a-zA-Z0-9-_]+)/);
+    if (folderMatch) {
+      return `https://drive.google.com/embeddedfolderview?id=${folderMatch[1]}#grid`;
+    }
+    // 2. Files
+    const fileMatch = url.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9-_]+)/);
+    if (fileMatch) {
+      return `https://drive.google.com/file/d/${fileMatch[1]}/preview`;
+    }
+    // 3. Docs
+    const docMatch = url.match(/docs\.google\.com\/document\/d\/([a-zA-Z0-9-_]+)/);
+    if (docMatch) {
+      return `https://docs.google.com/document/d/${docMatch[1]}/preview`;
+    }
+    // 4. Sheets
+    const sheetMatch = url.match(/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+    if (sheetMatch) {
+      return `https://docs.google.com/spreadsheets/d/${sheetMatch[1]}/preview`;
+    }
+    // 5. Slides
+    const slideMatch = url.match(/docs\.google\.com\/presentation\/d\/([a-zA-Z0-9-_]+)/);
+    if (slideMatch) {
+      return `https://docs.google.com/presentation/d/${slideMatch[1]}/embed`;
+    }
+    return url;
+  };
+
+  const getDriveTypeLabel = (url) => {
+    if (!url) return 'Document';
+    if (url.includes('document')) return 'Google Doc';
+    if (url.includes('spreadsheets')) return 'Google Sheet';
+    if (url.includes('presentation')) return 'Google Slide';
+    if (url.includes('folders')) return 'Google Drive Folder';
+    return 'Google Drive File';
+  };
+
+  const handleEmbed = () => {
+    if (urlInput.trim() !== '') {
+      setForm((prev) => ({
+        ...prev,
+        googleDriveUrl: urlInput.trim()
+      }));
+    }
+  };
+
+  const handleDisconnect = () => {
+    setUrlInput('');
+    setForm((prev) => ({
+      ...prev,
+      googleDriveUrl: ''
+    }));
+  };
 
   const handleSave = () => {
     saveNote(question.id, form);
@@ -136,6 +196,7 @@ export default function NotesModal({ question, onClose }) {
                   { id: 'optimalApproach', label: 'Optimal Approach', icon: Target },
                   { id: 'mistakes', label: 'Mistakes', icon: AlertTriangle },
                   { id: 'interviewLearnings', label: 'Learnings', icon: Info },
+                  { id: 'googleDrive', label: 'Google Drive', icon: FolderOpen },
                 ].map((tab) => {
                   const Icon = tab.icon;
                   const isActive = activeTab === tab.id;
@@ -245,119 +306,292 @@ export default function NotesModal({ question, onClose }) {
               </div>
             </div>
 
-            {/* Markdown editor area */}
+            {/* Markdown editor area / Google Drive Embedder */}
             <div className="markdown-editor-wrapper">
-              <div className="markdown-toolbar">
-                <div className="markdown-toolbar-group">
-                  <button
-                    type="button"
-                    className="markdown-toolbar-btn"
-                    onClick={() => insertMarkdown('heading')}
-                    title="Heading"
-                  >
-                    <Heading size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    className="markdown-toolbar-btn"
-                    onClick={() => insertMarkdown('bold')}
-                    title="Bold"
-                  >
-                    <Bold size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    className="markdown-toolbar-btn"
-                    onClick={() => insertMarkdown('italic')}
-                    title="Italic"
-                  >
-                    <Italic size={14} />
-                  </button>
-                  <div style={{ width: 1, height: 16, background: 'var(--border-primary)', margin: '0 4px' }} />
-                  <button
-                    type="button"
-                    className="markdown-toolbar-btn"
-                    onClick={() => insertMarkdown('ul')}
-                    title="Unordered List"
-                  >
-                    <List size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    className="markdown-toolbar-btn"
-                    onClick={() => insertMarkdown('ol')}
-                    title="Ordered List"
-                  >
-                    <ListOrdered size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    className="markdown-toolbar-btn"
-                    onClick={() => insertMarkdown('quote')}
-                    title="Blockquote"
-                  >
-                    <Quote size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    className="markdown-toolbar-btn"
-                    onClick={() => insertMarkdown('code')}
-                    title="Code Block"
-                  >
-                    <Code size={14} />
-                  </button>
-                  <div style={{ width: 1, height: 16, background: 'var(--border-primary)', margin: '0 4px' }} />
-                  <button
-                    type="button"
-                    className="markdown-toolbar-btn"
-                    onClick={() => insertMarkdown('link')}
-                    title="Link"
-                  >
-                    <Link size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    className="markdown-toolbar-btn"
-                    onClick={() => insertMarkdown('image')}
-                    title="Image"
-                  >
-                    <Image size={14} />
-                  </button>
-                </div>
-                <div className="markdown-toolbar-group">
-                  <button
-                    type="button"
-                    className={`markdown-toolbar-btn ${isPreview ? 'active' : ''}`}
-                    onClick={() => setIsPreview(!isPreview)}
-                    title={isPreview ? "Show Editor" : "Show Preview"}
-                  >
-                    <Eye size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    className={`markdown-toolbar-btn ${isMaximized ? 'active' : ''}`}
-                    onClick={() => setIsMaximized(!isMaximized)}
-                    title={isMaximized ? "Minimize" : "Maximize"}
-                  >
-                    {isMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-                  </button>
-                </div>
-              </div>
+              {activeTab === 'googleDrive' ? (
+                !form.googleDriveUrl ? (
+                  <div style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '40px 20px',
+                    textAlign: 'center',
+                    flex: 1,
+                    background: 'rgba(255, 255, 255, 0.01)',
+                  }}>
+                    <div style={{
+                      width: '60px',
+                      height: '60px',
+                      borderRadius: '50%',
+                      background: 'rgba(139, 92, 246, 0.08)',
+                      border: '1px solid rgba(139, 92, 246, 0.25)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      marginBottom: '20px',
+                      color: 'var(--accent-primary)',
+                      boxShadow: '0 4px 12px rgba(139, 92, 246, 0.1)'
+                    }}>
+                      <FolderOpen size={30} />
+                    </div>
+                    <h4 style={{ margin: '0 0 8px 0', fontSize: '16px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                      Embed Google Drive File or Folder
+                    </h4>
+                    <p style={{ margin: '0 0 24px 0', fontSize: '13px', color: 'var(--text-secondary)', maxWidth: '440px', lineHeight: 1.5 }}>
+                      Paste a Google Docs, Sheets, Slides, PDF, or Folder share link. You can interact with it directly inside this sheet.
+                    </p>
+                    <div style={{
+                      display: 'flex',
+                      gap: '10px',
+                      width: '100%',
+                      maxWidth: '480px',
+                      marginBottom: '16px'
+                    }}>
+                      <input
+                        type="text"
+                        placeholder="e.g. https://docs.google.com/document/d/..."
+                        value={urlInput}
+                        onChange={(e) => setUrlInput(e.target.value)}
+                        style={{
+                          flex: 1,
+                          padding: '10px 14px',
+                          background: 'var(--bg-tertiary)',
+                          border: '1px solid var(--border-secondary)',
+                          borderRadius: 'var(--radius-md)',
+                          color: 'var(--text-primary)',
+                          fontSize: '13px',
+                          outline: 'none',
+                          transition: 'border-color var(--transition-fast)'
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            handleEmbed();
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={handleEmbed}
+                        style={{ padding: '0 20px', height: '40px' }}
+                      >
+                        Embed
+                      </button>
+                    </div>
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      fontSize: '11px',
+                      color: 'var(--text-tertiary)',
+                      background: 'var(--bg-tertiary)',
+                      padding: '8px 12px',
+                      borderRadius: '6px',
+                      border: '1px solid var(--border-primary)',
+                      maxWidth: '480px',
+                    }}>
+                      <Info size={12} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
+                      <span>Make sure sharing is set to "Anyone with the link can view".</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', flex: 1, height: '100%' }}>
+                    {/* Header toolbar for Google Drive control */}
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '8px 16px',
+                      background: 'var(--bg-tertiary)',
+                      borderBottom: '1px solid var(--border-primary)',
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                        <div style={{
+                          width: '8px',
+                          height: '8px',
+                          borderRadius: '50%',
+                          background: '#10B981', // green dot indicating active/connected
+                          boxShadow: '0 0 8px #10B981',
+                        }} />
+                        <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          Embedded: {getDriveTypeLabel(form.googleDriveUrl)}
+                        </span>
+                      </div>
+                      
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                        <a
+                          href={form.googleDriveUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="btn btn-secondary btn-sm"
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            textDecoration: 'none',
+                            padding: '4px 10px',
+                            fontSize: '11px',
+                            height: '28px',
+                          }}
+                        >
+                          <ExternalLink size={12} />
+                          Open
+                        </a>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={handleDisconnect}
+                          style={{
+                            padding: '4px 10px',
+                            fontSize: '11px',
+                            height: '28px',
+                            borderColor: 'rgba(239, 68, 68, 0.3)',
+                            color: '#EF4444',
+                          }}
+                        >
+                          Disconnect
+                        </button>
+                      </div>
+                    </div>
 
-              {isPreview ? (
-                <div
-                  className="markdown-editor-preview"
-                  dangerouslySetInnerHTML={{ __html: renderMarkdown(form[activeTab]) || '<p style="color: var(--text-tertiary); font-style: italic;">Nothing to preview yet...</p>' }}
-                />
+                    {/* Iframe preview */}
+                    <div style={{
+                      flex: 1,
+                      position: 'relative',
+                      background: '#14141d',
+                      minHeight: '350px',
+                      height: isMaximized ? 'calc(100vh - 180px)' : '400px',
+                    }}>
+                      <iframe
+                        src={getEmbeddableDriveUrl(form.googleDriveUrl)}
+                        title="Google Drive Document Embed"
+                        width="100%"
+                        height="100%"
+                        style={{
+                          border: 'none',
+                          background: '#14141d',
+                        }}
+                        allow="autoplay"
+                      />
+                    </div>
+                  </div>
+                )
               ) : (
-                <textarea
-                  ref={textareaRef}
-                  value={form[activeTab]}
-                  onChange={(e) => setForm({ ...form, [activeTab]: e.target.value })}
-                  placeholder={`Type here...(Markdown is enabled for ${activeTab})`}
-                  className="markdown-editor-textarea"
-                  rows={10}
-                />
+                <>
+                  <div className="markdown-toolbar">
+                    <div className="markdown-toolbar-group">
+                      <button
+                        type="button"
+                        className="markdown-toolbar-btn"
+                        onClick={() => insertMarkdown('heading')}
+                        title="Heading"
+                      >
+                        <Heading size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        className="markdown-toolbar-btn"
+                        onClick={() => insertMarkdown('bold')}
+                        title="Bold"
+                      >
+                        <Bold size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        className="markdown-toolbar-btn"
+                        onClick={() => insertMarkdown('italic')}
+                        title="Italic"
+                      >
+                        <Italic size={14} />
+                      </button>
+                      <div style={{ width: 1, height: 16, background: 'var(--border-primary)', margin: '0 4px' }} />
+                      <button
+                        type="button"
+                        className="markdown-toolbar-btn"
+                        onClick={() => insertMarkdown('ul')}
+                        title="Unordered List"
+                      >
+                        <List size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        className="markdown-toolbar-btn"
+                        onClick={() => insertMarkdown('ol')}
+                        title="Ordered List"
+                      >
+                        <ListOrdered size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        className="markdown-toolbar-btn"
+                        onClick={() => insertMarkdown('quote')}
+                        title="Blockquote"
+                      >
+                        <Quote size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        className="markdown-toolbar-btn"
+                        onClick={() => insertMarkdown('code')}
+                        title="Code Block"
+                      >
+                        <Code size={14} />
+                      </button>
+                      <div style={{ width: 1, height: 16, background: 'var(--border-primary)', margin: '0 4px' }} />
+                      <button
+                        type="button"
+                        className="markdown-toolbar-btn"
+                        onClick={() => insertMarkdown('link')}
+                        title="Link"
+                      >
+                        <Link size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        className="markdown-toolbar-btn"
+                        onClick={() => insertMarkdown('image')}
+                        title="Image"
+                      >
+                        <Image size={14} />
+                      </button>
+                    </div>
+                    <div className="markdown-toolbar-group">
+                      <button
+                        type="button"
+                        className={`markdown-toolbar-btn ${isPreview ? 'active' : ''}`}
+                        onClick={() => setIsPreview(!isPreview)}
+                        title={isPreview ? "Show Editor" : "Show Preview"}
+                      >
+                        <Eye size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        className={`markdown-toolbar-btn ${isMaximized ? 'active' : ''}`}
+                        onClick={() => setIsMaximized(!isMaximized)}
+                        title={isMaximized ? "Minimize" : "Maximize"}
+                      >
+                        {isMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {isPreview ? (
+                    <div
+                      className="markdown-editor-preview"
+                      dangerouslySetInnerHTML={{ __html: renderMarkdown(form[activeTab]) || '<p style="color: var(--text-tertiary); font-style: italic;">Nothing to preview yet...</p>' }}
+                    />
+                  ) : (
+                    <textarea
+                      ref={textareaRef}
+                      value={form[activeTab]}
+                      onChange={(e) => setForm({ ...form, [activeTab]: e.target.value })}
+                      placeholder={`Type here...(Markdown is enabled for ${activeTab})`}
+                      className="markdown-editor-textarea"
+                      rows={10}
+                    />
+                  )}
+                </>
               )}
             </div>
           </div>

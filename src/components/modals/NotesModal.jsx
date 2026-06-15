@@ -520,7 +520,15 @@ export default function NotesModal({ question, onClose }) {
             </div>
 
             {/* Markdown editor area / Google Drive Embedder */}
-            <div className="markdown-editor-wrapper">
+            <div 
+              className="markdown-editor-wrapper"
+              style={{
+                height: activeTab === 'googleDrive' ? (isMaximized ? '100%' : '420px') : 'auto',
+                minHeight: activeTab === 'googleDrive' ? (isMaximized ? 'auto' : '420px') : 'auto',
+                display: 'flex',
+                flexDirection: 'column',
+              }}
+            >
               {activeTab === 'googleDrive' ? (
                 !isAuthorized && !form.googleDriveUrl ? (
                   /* 1. Unauthenticated Setup State */
@@ -906,9 +914,9 @@ export default function NotesModal({ question, onClose }) {
                         flex: 1,
                         position: 'relative',
                         background: '#14141d',
-                        height: isMaximized ? 'calc(100vh - 180px)' : '350px',
                         display: 'flex',
                         flexDirection: 'column',
+                        minHeight: 0,
                       }}>
                         {selectedFile ? (
                           /* Iframe displaying active file preview */

@@ -503,4 +503,5 @@ export function clearAllLocalStores() {
   localStorage.removeItem('dsa-progress-v2');
   localStorage.removeItem('dsa-notes-v2');
   localStorage.removeItem('dsa-revisions-v2');
+  localStorage.removeItem('dsa-google-auth-v1');
 }

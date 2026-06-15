@@ -72,6 +72,11 @@ export default function NotesModal({ question, onClose }) {
   const tokenClientRef = useRef(null);
 
   useEffect(() => {
+    // Run expiry check on mount
+    useGoogleAuthStore.getState().checkExpiry();
+  }, []);
+
+  useEffect(() => {
     if (window.google && !tokenClientRef.current) {
       tokenClientRef.current = window.google.accounts.oauth2.initTokenClient({
         client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID,
@@ -92,8 +97,15 @@ export default function NotesModal({ question, onClose }) {
           setGDriveError(`OAuth client error: ${err.message}`);
         }
       });
+
+      // Auto-reconnect on mount if token is expired/absent and folder is linked
+      const expired = useGoogleAuthStore.getState().checkExpiry();
+      if (expired && form.googleDriveUrl && form.googleDriveUrl.includes('folders')) {
+        setIsConnecting(true);
+        tokenClientRef.current.requestAccessToken({ prompt: '' });
+      }
     }
-  }, [setAccessToken]);
+  }, [setAccessToken, form.googleDriveUrl]);
 
   const handleConnectGDrive = () => {
     if (tokenClientRef.current) {
@@ -350,6 +362,15 @@ export default function NotesModal({ question, onClose }) {
                       onClick={() => {
                         setActiveTab(tab.id);
                         setIsPreview(false);
+                        
+                        // Auto-reconnect if token is expired when switching to Google Drive tab
+                        if (tab.id === 'googleDrive') {
+                          const expired = useGoogleAuthStore.getState().checkExpiry();
+                          if (expired && form.googleDriveUrl && form.googleDriveUrl.includes('folders') && tokenClientRef.current) {
+                            setIsConnecting(true);
+                            tokenClientRef.current.requestAccessToken({ prompt: '' });
+                          }
+                        }
                       }}
                       style={{ paddingBottom: '6px' }}
                     >

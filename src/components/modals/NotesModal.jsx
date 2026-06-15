@@ -74,6 +74,7 @@ export default function NotesModal({ question, onClose }) {
   const [dragActive, setDragActive] = useState(false);
   const [gDriveError, setGDriveError] = useState(null);
   const [iframeKey, setIframeKey] = useState(0);
+  const [showUploadPanel, setShowUploadPanel] = useState(false);
 
   // Native files list states
   const [folderFiles, setFolderFiles] = useState([]);
@@ -366,7 +367,15 @@ export default function NotesModal({ question, onClose }) {
 
   return createPortal(
     <div className="modal-overlay" onClick={onClose}>
-      <div className={`modal ${isMaximized ? 'maximized' : ''}`} onClick={(e) => e.stopPropagation()} style={isMaximized ? {} : { maxWidth: '720px' }}>
+      <div 
+        className={`modal ${isMaximized ? 'maximized' : ''}`} 
+        onClick={(e) => e.stopPropagation()} 
+        style={{ 
+          ...(isMaximized ? {} : { maxWidth: '720px' }), 
+          position: 'relative',
+          overflow: showUploadPanel ? 'hidden' : 'auto'
+        }}
+      >
         <div className="modal-header">
           <div>
             <div className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -803,32 +812,32 @@ export default function NotesModal({ question, onClose }) {
                         ) : (
                           <>
                             {form.googleDriveUrl.includes('folders') && (
-                              <a
-                                href={form.googleDriveUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
+                              <button
+                                type="button"
                                 className="btn btn-secondary btn-sm"
+                                onClick={() => setShowUploadPanel(true)}
                                 style={{
                                   display: 'flex',
                                   alignItems: 'center',
                                   gap: '6px',
-                                  textDecoration: 'none',
                                   padding: '4px 10px',
                                   fontSize: '11px',
                                   height: '28px',
                                   borderColor: 'rgba(139, 92, 246, 0.4)',
                                   color: 'var(--accent-primary)',
+                                  background: 'transparent',
+                                  cursor: 'pointer',
                                 }}
                                 onMouseEnter={(e) => {
                                   e.currentTarget.style.background = 'rgba(139, 92, 246, 0.08)';
                                 }}
                                 onMouseLeave={(e) => {
-                                  e.currentTarget.style.background = 'var(--bg-tertiary)';
+                                  e.currentTarget.style.background = 'transparent';
                                 }}
                               >
-                                <UploadCloud size={12} />
+                                <CloudUpload size={12} />
                                 Upload Files
-                              </a>
+                              </button>
                             )}
                             <a
                               href={form.googleDriveUrl}
@@ -884,22 +893,20 @@ export default function NotesModal({ question, onClose }) {
                       </div>
                     )}
 
-                    {/* Main content grid */}
+                    {/* Main content grid (De-cluttered Full Width) */}
                     <div style={{
                       display: 'flex',
-                      flexDirection: isMaximized ? 'row' : 'column',
+                      flexDirection: 'column',
                       flex: 1,
                       minHeight: 0,
                     }}>
                       
-                      {/* Left Pane (File list OR Iframe preview) */}
+                      {/* Full-width Pane (File list OR Iframe preview) */}
                       <div style={{
-                        flex: 2,
+                        flex: 1,
                         position: 'relative',
                         background: '#14141d',
                         height: isMaximized ? 'calc(100vh - 180px)' : '350px',
-                        borderRight: isMaximized ? '1px solid var(--border-primary)' : 'none',
-                        borderBottom: isMaximized ? 'none' : '1px solid var(--border-primary)',
                         display: 'flex',
                         flexDirection: 'column',
                       }}>
@@ -930,7 +937,7 @@ export default function NotesModal({ question, onClose }) {
                               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-tertiary)', padding: '20px' }}>
                                 <FolderOpen size={36} style={{ color: 'var(--text-tertiary)', marginBottom: '12px', opacity: 0.5 }} />
                                 <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>This folder is empty</span>
-                                <span style={{ fontSize: '11px', marginTop: '4px', textAlign: 'center' }}>Drag and drop files to the upload box on the right to get started!</span>
+                                <span style={{ fontSize: '11px', marginTop: '4px', textAlign: 'center' }}>Click "Upload Files" in the toolbar or footer to start uploading notes!</span>
                               </div>
                             ) : (
                               <div style={{
@@ -1026,138 +1033,6 @@ export default function NotesModal({ question, onClose }) {
                             }}
                             allow="autoplay"
                           />
-                        )}
-                      </div>
-
-                      {/* Right Panel (Upload Area / Session State) */}
-                      <div style={{
-                        flex: 1,
-                        padding: '16px',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        justifyContent: 'space-between',
-                        background: 'rgba(255, 255, 255, 0.005)',
-                        maxWidth: isMaximized ? '280px' : 'none',
-                        minHeight: isMaximized ? 'none' : '140px',
-                      }}>
-                        {isAuthorized ? (
-                          /* Drag & Drop Upload Zone */
-                          <div style={{ display: 'flex', flexDirection: 'column', flex: 1, justifyContent: 'space-between' }}>
-                            <div
-                              onDragEnter={handleDrag}
-                              onDragOver={handleDrag}
-                              onDragLeave={handleDrag}
-                              onDrop={handleDrop}
-                              style={{
-                                flex: 1,
-                                border: dragActive ? '2px dashed var(--accent-primary)' : '2px dashed var(--border-secondary)',
-                                borderRadius: 'var(--radius-md)',
-                                display: 'flex',
-                                flexDirection: 'column',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                textAlign: 'center',
-                                padding: '16px',
-                                background: dragActive ? 'rgba(139, 92, 246, 0.04)' : 'transparent',
-                                transition: 'all 0.2s',
-                                cursor: 'pointer',
-                              }}
-                              onClick={() => document.getElementById('gdrive-file-input').click()}
-                            >
-                              <CloudUpload size={24} style={{ color: dragActive ? 'var(--accent-primary)' : 'var(--text-tertiary)', marginBottom: '8px' }} />
-                              <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                                Drag & Drop notes here
-                              </span>
-                              <span style={{ fontSize: '9px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
-                                or click to select file
-                              </span>
-                              <input
-                                type="file"
-                                id="gdrive-file-input"
-                                multiple
-                                style={{ display: 'none' }}
-                                onChange={handleFileSelect}
-                              />
-                            </div>
-
-                            {/* Active uploads queue */}
-                            {Object.keys(uploadingFiles).length > 0 && (
-                              <div style={{
-                                marginTop: '12px',
-                                background: 'var(--bg-tertiary)',
-                                border: '1px solid var(--border-primary)',
-                                borderRadius: '6px',
-                                padding: '8px 12px',
-                                maxHeight: '110px',
-                                overflowY: 'auto',
-                              }}>
-                                <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                                  Upload Queue
-                                </span>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                                  {Object.entries(uploadingFiles).map(([filename, status]) => (
-                                    <div key={filename} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '11px', gap: '8px' }}>
-                                      <span style={{ color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-                                        {filename}
-                                      </span>
-                                      <span style={{
-                                        flexShrink: 0,
-                                        fontSize: '9px',
-                                        fontWeight: 700,
-                                        color: status === 'success' ? '#10B981' : status === 'error' ? '#EF4444' : 'var(--accent-primary)',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '3px'
-                                      }}>
-                                        {status === 'success' && <CheckCircle size={10} />}
-                                        {status === 'error' && <AlertCircle size={10} />}
-                                        {status === 'uploading' && <RefreshCw size={10} className="spin" style={{ animation: 'spin 1s linear infinite' }} />}
-                                        {status}
-                                      </span>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          /* Prompt to Connect Google Drive for upload capabilities */
-                          <div style={{
-                            display: 'flex',
-                            flexDirection: 'column',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            flex: 1,
-                            border: '1px solid var(--border-primary)',
-                            borderRadius: 'var(--radius-md)',
-                            padding: '16px',
-                            background: 'rgba(255, 255, 255, 0.005)',
-                            textAlign: 'center',
-                          }}>
-                            <Info size={16} style={{ color: 'var(--accent-primary)', marginBottom: '8px' }} />
-                            <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>
-                              uploads disabled
-                            </span>
-                            <p style={{ fontSize: '10px', color: 'var(--text-tertiary)', margin: '0 0 12px 0', lineHeight: 1.4 }}>
-                              Connect your Google Drive account to enable drag & drop file uploads.
-                            </p>
-                            <button
-                              type="button"
-                              className="btn btn-secondary btn-sm"
-                              onClick={handleConnectGDrive}
-                              disabled={isConnecting}
-                              style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', padding: '4px 12px' }}
-                            >
-                              {isConnecting ? (
-                                <>
-                                  <RefreshCw size={10} className="spin" style={{ animation: 'spin 1s linear infinite' }} />
-                                  Connecting...
-                                </>
-                              ) : (
-                                "Connect Account"
-                              )}
-                            </button>
-                          </div>
                         )}
                       </div>
                     </div>
@@ -1283,10 +1158,223 @@ export default function NotesModal({ question, onClose }) {
           </div>
         </div>
 
-        <div className="modal-footer">
+        <div className="modal-footer" style={{ gap: '10px' }}>
+          {activeTab === 'googleDrive' && isAuthorized && form.googleDriveUrl && form.googleDriveUrl.includes('folders') && (
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setShowUploadPanel(true)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '0 16px',
+                height: '38px',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid rgba(139, 92, 246, 0.4)',
+                color: 'var(--accent-primary)',
+                background: 'rgba(139, 92, 246, 0.03)',
+                fontWeight: 600,
+                fontSize: '13px',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = 'rgba(139, 92, 246, 0.08)';
+                e.currentTarget.style.borderColor = 'var(--accent-primary)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'rgba(139, 92, 246, 0.03)';
+                e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.4)';
+              }}
+            >
+              <CloudUpload size={16} />
+              Upload Files
+            </button>
+          )}
           <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
           <button className="btn btn-primary" onClick={handleSave}>Save Notes</button>
         </div>
+
+        {/* Upload Overlay */}
+        {showUploadPanel && (
+          <div 
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              background: 'rgba(10, 10, 15, 0.75)',
+              backdropFilter: 'blur(12px)',
+              WebkitBackdropFilter: 'blur(12px)',
+              zIndex: 100,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '32px',
+              borderRadius: 'var(--radius-xl)', // matches modal xl border radius
+              animation: 'fadeIn 0.2s ease-out',
+            }}
+            onClick={() => setShowUploadPanel(false)}
+          >
+            <div 
+              style={{
+                background: 'var(--bg-secondary)',
+                border: '1px solid var(--border-primary)',
+                borderRadius: '12px',
+                padding: '24px',
+                width: '100%',
+                maxWidth: '480px',
+                boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.5)',
+                display: 'flex',
+                flexDirection: 'column',
+                position: 'relative',
+                gap: '16px',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Close button top right */}
+              <button
+                type="button"
+                onClick={() => setShowUploadPanel(false)}
+                style={{
+                  position: 'absolute',
+                  top: '16px',
+                  right: '16px',
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  padding: '4px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderRadius: '50%',
+                  transition: 'background-color 0.2s',
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.05)'}
+                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+              >
+                <X size={18} />
+              </button>
+
+              {/* Title & Description */}
+              <div>
+                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <CloudUpload size={20} style={{ color: 'var(--accent-primary)' }} />
+                  Upload to Google Drive
+                </h3>
+                <p style={{ margin: '6px 0 0 0', fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                  Files will be uploaded directly to the linked folder: <br/>
+                  <span style={{ fontFamily: 'monospace', color: 'var(--text-tertiary)' }}>
+                    {form.googleDriveUrl.split('/').pop()}
+                  </span>
+                </p>
+              </div>
+
+              {/* Drag and Drop Zone */}
+              <div
+                onDragEnter={handleDrag}
+                onDragOver={handleDrag}
+                onDragLeave={handleDrag}
+                onDrop={handleDrop}
+                onClick={() => document.getElementById('overlay-gdrive-file-input').click()}
+                style={{
+                  border: dragActive ? '2px dashed var(--accent-primary)' : '2px dashed var(--border-secondary)',
+                  borderRadius: '8px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  textAlign: 'center',
+                  padding: '32px 16px',
+                  background: dragActive ? 'rgba(139, 92, 246, 0.06)' : 'rgba(255, 255, 255, 0.01)',
+                  transition: 'all 0.2s ease',
+                  cursor: 'pointer',
+                }}
+                onMouseEnter={(e) => {
+                  if (!dragActive) e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.6)';
+                }}
+                onMouseLeave={(e) => {
+                  if (!dragActive) e.currentTarget.style.borderColor = 'var(--border-secondary)';
+                }}
+              >
+                <CloudUpload size={36} style={{ color: dragActive ? 'var(--accent-primary)' : 'var(--text-secondary)', marginBottom: '12px' }} />
+                <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                  Drag & Drop files here
+                </span>
+                <span style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
+                  or click to select files from your computer
+                </span>
+                <input
+                  type="file"
+                  id="overlay-gdrive-file-input"
+                  multiple
+                  style={{ display: 'none' }}
+                  onChange={handleFileSelect}
+                />
+              </div>
+
+              {/* Active uploads queue */}
+              {Object.keys(uploadingFiles).length > 0 && (
+                <div style={{
+                  background: 'var(--bg-tertiary)',
+                  border: '1px solid var(--border-primary)',
+                  borderRadius: '6px',
+                  padding: '10px 14px',
+                  maxHeight: '130px',
+                  overflowY: 'auto',
+                }}>
+                  <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Upload Queue ({Object.keys(uploadingFiles).length})
+                  </span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {Object.entries(uploadingFiles).map(([filename, status]) => (
+                      <div key={filename} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '12px', gap: '8px' }}>
+                        <span style={{ color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                          {filename}
+                        </span>
+                        <span style={{
+                          flexShrink: 0,
+                          fontSize: '10px',
+                          fontWeight: 700,
+                          color: status === 'success' ? '#10B981' : status === 'error' ? '#EF4444' : 'var(--accent-primary)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px'
+                        }}>
+                          {status === 'success' && <CheckCircle size={12} />}
+                          {status === 'error' && <AlertCircle size={12} />}
+                          {status === 'uploading' && <RefreshCw size={12} className="spin" style={{ animation: 'spin 1s linear infinite' }} />}
+                          {status}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Done / Close Button */}
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => setShowUploadPanel(false)}
+                style={{
+                  width: '100%',
+                  height: '40px',
+                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>,
     document.body

@@ -1,13 +1,18 @@
 
 import { Link, useLocation } from 'react-router-dom';
+import { useEffect, useState } from 'react';
 import {
-  LayoutDashboard, Map, BookOpen, ListChecks, Target, RotateCcw, Bookmark, User
+  LayoutDashboard, Map, BookOpen, ListChecks, Target, RotateCcw, Bookmark, User, Users
 } from 'lucide-react';
 import { formatLocalDate, DsaMasteryLogo } from '../utils/helpers.jsx';
 import useRevisionStore from '../store/useRevisionStore.js';
+import { auth, db } from '../firebaseClient.js';
+import { onAuthStateChanged } from 'firebase/auth';
+import { collection, query, where, onSnapshot } from 'firebase/firestore';
 
 export default function Sidebar({ isOpen, onClose, allQuestions = [] }) {
   const location = useLocation();
+  const [pendingSharesCount, setPendingSharesCount] = useState(0);
 
   // Compute due count directly from active profile's revisions
   const dueCount = useRevisionStore((s) => {
@@ -18,6 +23,27 @@ export default function Sidebar({ isOpen, onClose, allQuestions = [] }) {
     ).length;
   });
 
+  // Real-time listener for incoming pending shares count
+  useEffect(() => {
+    if (!auth || !db) return;
+    const unsubAuth = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        const q = query(
+          collection(db, 'shared_notes_access'),
+          where('recipientUid', '==', user.uid),
+          where('status', '==', 'pending')
+        );
+        const unsubSnap = onSnapshot(q, (snap) => {
+          setPendingSharesCount(snap.size);
+        });
+        return () => unsubSnap();
+      } else {
+        setPendingSharesCount(0);
+      }
+    });
+    return unsubAuth;
+  }, []);
+
   const navItems = [
     { path: '/', label: 'Dashboard', icon: LayoutDashboard },
     { path: '/roadmap', label: 'Roadmap', icon: Map },
@@ -25,6 +51,7 @@ export default function Sidebar({ isOpen, onClose, allQuestions = [] }) {
     { path: '/sheet', label: 'Problem Sheet', icon: ListChecks },
     { path: '/patterns', label: 'Patterns', icon: Target },
     { path: '/revision', label: 'Revision', icon: RotateCcw, badge: dueCount || null },
+    { path: '/shared-notes', label: 'Shared Notes', icon: Users, badge: pendingSharesCount || null },
     { path: '/bookmarks', label: 'Bookmarks', icon: Bookmark },
     { path: '/profile', label: 'Profile', icon: User },
   ];

@@ -33,14 +33,20 @@ import {
   FileImage,
   ChevronLeft,
   File,
-  FileText
+  FileText,
+  Users,
+  UserPlus,
+  Trash2
 } from 'lucide-react';
 import useNotesStore from '../../store/useNotesStore.js';
 import { useGoogleAuthStore } from '../../store/useGoogleAuthStore.js';
 import { getOrCreateFolder, uploadFileToFolder, getFilesInFolder } from '../../utils/googleDrive.js';
 import { renderMarkdown } from '../../utils/markdown.js';
 
-export default function NotesModal({ question, onClose, isConcept = false, concept = null }) {
+import { auth, db } from '../../firebaseClient.js';
+import { doc, getDoc, setDoc, deleteDoc, collection, query, where, onSnapshot } from 'firebase/firestore';
+
+export default function NotesModal({ question, onClose, isConcept = false, concept = null, peerOwnerUid = null, peerOwnerUsername = null }) {
   const noteId = isConcept ? `concept_${concept.patternId}` : question.id;
   const topicName = isConcept ? (concept.topicName || 'General') : (question.topic || 'General');
   const folderName = isConcept ? (concept.patternName || 'Concept') : `${question.num || ''}. ${question.title || 'Untitled'}`;
@@ -48,6 +54,11 @@ export default function NotesModal({ question, onClose, isConcept = false, conce
   const saveNote = useNotesStore((s) => s.saveNote);
   const existingNote = useNotesStore((s) => s.profiles[s.activeProfileId]?.[noteId]);
   const existing = existingNote || {};
+
+  // Google Auth integration
+  const accessToken = useGoogleAuthStore((s) => s.accessToken);
+  const isAuthorized = useGoogleAuthStore((s) => s.isAuthorized);
+  const setAccessToken = useGoogleAuthStore((s) => s.setAccessToken);
 
   const [form, setForm] = useState({
     keyIdea: existing.keyIdea || '',
@@ -60,16 +71,122 @@ export default function NotesModal({ question, onClose, isConcept = false, conce
     googleDriveUrl: existing.googleDriveUrl || '',
   });
 
+  // Peer view state overriding
+  const [currentPeerUid, setCurrentPeerUid] = useState(peerOwnerUid);
+  const [currentPeerUsername, setCurrentPeerUsername] = useState(peerOwnerUsername);
+  const [loadingPeerNote, setLoadingPeerNote] = useState(!!peerOwnerUid);
+
+  useEffect(() => {
+    if (!currentPeerUid) return;
+
+    const fetchPeerNote = async () => {
+      setLoadingPeerNote(true);
+      try {
+        const docRef = doc(db, 'user_notes', `${currentPeerUid}_${noteId}`);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          setForm({
+            keyIdea: data.keyIdea || '',
+            mistakes: data.mistakes || '',
+            optimalApproach: data.optimalApproach || '',
+            timeComplexity: data.timeComplexity || '',
+            spaceComplexity: data.spaceComplexity || '',
+            notes: data.notes || data.note || '',
+            interviewLearnings: data.interviewLearnings || '',
+            googleDriveUrl: data.googleDriveUrl || '',
+          });
+          setUrlInput(data.googleDriveUrl || '');
+        }
+      } catch (err) {
+        console.error("Failed to fetch peer note:", err);
+      } finally {
+        setLoadingPeerNote(false);
+      }
+    };
+
+    fetchPeerNote();
+  }, [currentPeerUid, noteId]);
+
+  // States for viewing a peer's notes inline within the Shared tab
+  const [selectedPeerForView, setSelectedPeerForView] = useState(null);
+  const [peerForm, setPeerForm] = useState(null);
+  const [loadingPeerNotesTab, setLoadingPeerNotesTab] = useState(false);
+  const [peerFolderFiles, setPeerFolderFiles] = useState([]);
+  const [isLoadingPeerFiles, setIsLoadingPeerFiles] = useState(false);
+  const [peerSelectedFile, setPeerSelectedFile] = useState(null);
+  const [peerActiveSubTab, setPeerActiveSubTab] = useState('notes'); // 'notes' | 'details' | 'googleDrive'
+
+  // Peer note fetching effect for inline Shared tab view
+  useEffect(() => {
+    if (!selectedPeerForView) {
+      setPeerForm(null);
+      setPeerFolderFiles([]);
+      setPeerSelectedFile(null);
+      return;
+    }
+
+    const fetchPeerNoteForTab = async () => {
+      setLoadingPeerNotesTab(true);
+      try {
+        const docRef = doc(db, 'user_notes', `${selectedPeerForView.uid}_${noteId}`);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          const pForm = {
+            keyIdea: data.keyIdea || '',
+            mistakes: data.mistakes || '',
+            optimalApproach: data.optimalApproach || '',
+            timeComplexity: data.timeComplexity || '',
+            spaceComplexity: data.spaceComplexity || '',
+            notes: data.notes || data.note || '',
+            interviewLearnings: data.interviewLearnings || '',
+            googleDriveUrl: data.googleDriveUrl || '',
+          };
+          setPeerForm(pForm);
+
+          // If they have a google drive folder URL, we can attempt to list files if the current user has authorized GDrive
+          if (pForm.googleDriveUrl && pForm.googleDriveUrl.includes('folders') && isAuthorized) {
+            setIsLoadingPeerFiles(true);
+            try {
+              const folderMatch = pForm.googleDriveUrl.match(/drive\.google\.com\/drive\/(?:u\/\d+\/)?folders\/([a-zA-Z0-9-_]+)/);
+              if (folderMatch) {
+                const files = await getFilesInFolder(folderMatch[1], accessToken);
+                setPeerFolderFiles(files);
+              }
+            } catch (err) {
+              console.error("Failed to list peer folder files:", err);
+            } finally {
+              setIsLoadingPeerFiles(false);
+            }
+          }
+        } else {
+          setPeerForm({
+            keyIdea: '',
+            mistakes: '',
+            optimalApproach: '',
+            timeComplexity: '',
+            spaceComplexity: '',
+            notes: '',
+            interviewLearnings: '',
+            googleDriveUrl: '',
+          });
+        }
+      } catch (err) {
+        console.error("Failed to fetch peer note for tab:", err);
+      } finally {
+        setLoadingPeerNotesTab(false);
+      }
+    };
+
+    fetchPeerNoteForTab();
+  }, [selectedPeerForView, noteId, isAuthorized, accessToken]);
+
   const [urlInput, setUrlInput] = useState(existing.googleDriveUrl || '');
   const [activeTab, setActiveTab] = useState('notes'); // Default tab is Notes
-  const [isPreview, setIsPreview] = useState(false);
+  const [isPreview, setIsPreview] = useState(!!peerOwnerUid);
   const [isMaximized, setIsMaximized] = useState(false);
   const textareaRef = useRef(null);
-
-  // Google Auth integration
-  const accessToken = useGoogleAuthStore((s) => s.accessToken);
-  const isAuthorized = useGoogleAuthStore((s) => s.isAuthorized);
-  const setAccessToken = useGoogleAuthStore((s) => s.setAccessToken);
 
   // Drive integration UI states
   const [isConnecting, setIsConnecting] = useState(false);
@@ -84,6 +201,130 @@ export default function NotesModal({ question, onClose, isConcept = false, conce
   const [folderFiles, setFolderFiles] = useState([]);
   const [selectedFile, setSelectedFile] = useState(null);
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
+
+  // Share note with peer states
+  const [shareUsername, setShareUsername] = useState('');
+  const [isSharing, setIsSharing] = useState(false);
+  const [shareError, setShareError] = useState(null);
+  const [shareSuccess, setShareSuccess] = useState(null);
+  const [outboundShares, setOutboundShares] = useState([]);
+  const [peerShares, setPeerShares] = useState([]);
+
+  // Real-time listener for outbound shares
+  useEffect(() => {
+    if (currentPeerUid || !auth.currentUser) return;
+    const q = query(
+      collection(db, 'shared_notes_access'),
+      where('ownerUid', '==', auth.currentUser.uid),
+      where('noteId', '==', noteId)
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const list = [];
+      snap.forEach((docSnap) => {
+        list.push({ id: docSnap.id, ...docSnap.data() });
+      });
+      setOutboundShares(list);
+    });
+    return unsub;
+  }, [noteId, currentPeerUid]);
+
+  // Real-time listener for peer shared notes (inbound accepted) for this topic
+  useEffect(() => {
+    if (currentPeerUid || !auth.currentUser) return;
+    const q = query(
+      collection(db, 'shared_notes_access'),
+      where('recipientUid', '==', auth.currentUser.uid),
+      where('noteId', '==', noteId),
+      where('status', '==', 'accepted')
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const list = [];
+      snap.forEach((docSnap) => {
+        list.push(docSnap.data());
+      });
+      setPeerShares(list);
+    });
+    return unsub;
+  }, [noteId, currentPeerUid]);
+
+  const handleShare = async (e) => {
+    e.preventDefault();
+    const targetUsername = shareUsername.trim();
+    if (!targetUsername) return;
+
+    const authUser = auth.currentUser;
+    if (!authUser) {
+      setShareError("You must be logged in to share notes.");
+      return;
+    }
+
+    setIsSharing(true);
+    setShareError(null);
+    setShareSuccess(null);
+
+    try {
+      // 1. Resolve username to UID
+      const usernameLower = targetUsername.toLowerCase();
+      const userRef = doc(db, 'usernames', usernameLower);
+      const userSnap = await getDoc(userRef);
+
+      if (!userSnap.exists()) {
+        setShareError(`Username "${targetUsername}" does not exist.`);
+        setIsSharing(false);
+        return;
+      }
+
+      const recipientUid = userSnap.data().uid;
+
+      if (recipientUid === authUser.uid) {
+        setShareError("You cannot share notes with yourself.");
+        setIsSharing(false);
+        return;
+      }
+
+      // 2. Fetch sender's username
+      let senderUsername = authUser.displayName || 'Anonymous';
+      const senderDocRef = doc(db, 'users', authUser.uid);
+      const senderDocSnap = await getDoc(senderDocRef);
+      if (senderDocSnap.exists()) {
+        senderUsername = senderDocSnap.data().username || senderUsername;
+      }
+
+      // 3. Create access record
+      const shareDocId = `${noteId}_${recipientUid}`;
+      const shareRef = doc(db, 'shared_notes_access', shareDocId);
+      await setDoc(shareRef, {
+        noteId,
+        ownerUid: authUser.uid,
+        ownerUsername: senderUsername,
+        recipientUid,
+        recipientUsername: targetUsername,
+        status: 'pending',
+        sharedAt: new Date().toISOString(),
+        isConcept,
+        questionNum: isConcept ? null : question.num,
+        title: isConcept ? concept.patternName : question.title,
+        topicName: topicName
+      });
+
+      setShareSuccess(`Shared note invitation sent to @${targetUsername}!`);
+      setShareUsername('');
+    } catch (err) {
+      console.error("Failed to share note:", err);
+      setShareError(`Failed to share note: ${err.message}`);
+    } finally {
+      setIsSharing(false);
+    }
+  };
+
+  const handleRevokeShare = async (shareId) => {
+    try {
+      const shareRef = doc(db, 'shared_notes_access', shareId);
+      await deleteDoc(shareRef);
+    } catch (err) {
+      console.error("Failed to revoke share:", err);
+    }
+  };
 
   const tokenClientRef = useRef(null);
 
@@ -381,7 +622,10 @@ export default function NotesModal({ question, onClose, isConcept = false, conce
           <div>
             <div className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <StickyNote size={18} style={{ color: 'var(--accent-primary)' }} />
-              {isConcept ? 'Concept Notes Editor' : 'Notes Editor'}
+              {currentPeerUid 
+                ? `${isConcept ? 'Concept Notes' : 'Notes'} (Shared by @${currentPeerUsername})`
+                : (isConcept ? 'Concept Notes Editor' : 'Notes Editor')
+              }
             </div>
             <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>
               {isConcept ? `Topic: ${topicName} | Concept: ${folderName}` : `${question.num}. ${question.title}`}
@@ -390,8 +634,14 @@ export default function NotesModal({ question, onClose, isConcept = false, conce
           <button className="modal-close" onClick={onClose} aria-label="Close modal"><X size={18} /></button>
         </div>
 
-        <div className="modal-body">
-          <div className="notes-form">
+        <div className="modal-body" style={{ minHeight: '300px', display: 'flex', flexDirection: 'column' }}>
+          {loadingPeerNote ? (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: '12px', padding: '60px 0' }}>
+              <RefreshCw size={32} className="spin" style={{ color: 'var(--accent-primary)', animation: 'spin 1s linear infinite' }} />
+              <span style={{ fontSize: '14px', color: 'var(--text-secondary)', fontWeight: 500 }}>Loading @{currentPeerUsername}'s notes...</span>
+            </div>
+          ) : (
+            <div className="notes-form" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
             {/* Note Fields Tabs & Complexity Inline */}
             <div className="notes-tabs" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border-primary)', paddingBottom: '4px', marginBottom: '16px', gap: '12px', flexWrap: 'wrap' }}>
               <div style={{ display: 'flex', gap: 4, overflowX: 'auto' }}>
@@ -402,6 +652,7 @@ export default function NotesModal({ question, onClose, isConcept = false, conce
                   { id: 'mistakes', label: 'Mistakes', icon: AlertTriangle },
                   { id: 'interviewLearnings', label: 'Learnings', icon: Info },
                   { id: 'googleDrive', label: 'Google Drive', icon: FolderOpen },
+                  ...(!currentPeerUid ? [{ id: 'collab', label: 'Shared', icon: Users }] : []),
                 ].map((tab) => {
                   const Icon = tab.icon;
                   const isActive = activeTab === tab.id;
@@ -435,89 +686,129 @@ export default function NotesModal({ question, onClose, isConcept = false, conce
               </div>
 
               {/* Inline Complexity Fields */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginLeft: 'auto', paddingBottom: '4px' }}>
-                {/* Time Capsule */}
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  background: 'rgba(139, 92, 246, 0.08)',
-                  border: '1px solid rgba(139, 92, 246, 0.3)',
-                  borderRadius: '100px',
-                  padding: '4px 12px',
-                  transition: 'all 0.2s',
-                  boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--accent-primary)';
-                  e.currentTarget.style.background = 'rgba(139, 92, 246, 0.12)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.3)';
-                  e.currentTarget.style.background = 'rgba(139, 92, 246, 0.08)';
-                }}
-                >
-                  <Clock size={12} style={{ color: 'var(--accent-primary)' }} />
-                  <span style={{ fontSize: 11, color: 'var(--accent-primary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' }}>Time:</span>
-                  <input
-                    type="text"
-                    value={form.timeComplexity}
-                    onChange={(e) => setForm({ ...form, timeComplexity: e.target.value })}
-                    placeholder="e.g. O(n)"
-                    style={{
-                      background: 'transparent',
-                      border: 'none',
-                      color: 'var(--text-primary)',
-                      padding: 0,
-                      fontSize: 12,
-                      fontWeight: 600,
-                      width: '80px',
-                      outline: 'none',
-                    }}
-                  />
-                </div>
+              {currentPeerUid ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginLeft: 'auto', paddingBottom: '4px' }}>
+                  {/* Time Capsule (Read-only) */}
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    background: 'rgba(139, 92, 246, 0.08)',
+                    border: '1px solid rgba(139, 92, 246, 0.3)',
+                    borderRadius: '100px',
+                    padding: '4px 12px',
+                    boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                  }}>
+                    <Clock size={12} style={{ color: 'var(--accent-primary)' }} />
+                    <span style={{ fontSize: 11, color: 'var(--accent-primary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' }}>Time:</span>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>
+                      {form.timeComplexity || 'N/A'}
+                    </span>
+                  </div>
 
-                {/* Space Capsule */}
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  background: 'rgba(59, 130, 246, 0.08)',
-                  border: '1px solid rgba(59, 130, 246, 0.3)',
-                  borderRadius: '100px',
-                  padding: '4px 12px',
-                  transition: 'all 0.2s',
-                  boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--accent-secondary)';
-                  e.currentTarget.style.background = 'rgba(59, 130, 246, 0.12)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = 'rgba(59, 130, 246, 0.3)';
-                  e.currentTarget.style.background = 'rgba(59, 130, 246, 0.08)';
-                }}
-                >
-                  <Layers size={12} style={{ color: 'var(--accent-secondary)' }} />
-                  <span style={{ fontSize: 11, color: 'var(--accent-secondary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' }}>Space:</span>
-                  <input
-                    type="text"
-                    value={form.spaceComplexity}
-                    onChange={(e) => setForm({ ...form, spaceComplexity: e.target.value })}
-                    placeholder="e.g. O(1)"
-                    style={{
-                      background: 'transparent',
-                      border: 'none',
-                      color: 'var(--text-primary)',
-                      padding: 0,
-                      fontSize: 12,
-                      fontWeight: 600,
-                      width: '80px',
-                      outline: 'none',
-                    }}
-                  />
+                  {/* Space Capsule (Read-only) */}
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    background: 'rgba(59, 130, 246, 0.08)',
+                    border: '1px solid rgba(59, 130, 246, 0.3)',
+                    borderRadius: '100px',
+                    padding: '4px 12px',
+                    boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                  }}>
+                    <Layers size={12} style={{ color: 'var(--accent-secondary)' }} />
+                    <span style={{ fontSize: 11, color: 'var(--accent-secondary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' }}>Space:</span>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>
+                      {form.spaceComplexity || 'N/A'}
+                    </span>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginLeft: 'auto', paddingBottom: '4px' }}>
+                  {/* Time Capsule */}
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    background: 'rgba(139, 92, 246, 0.08)',
+                    border: '1px solid rgba(139, 92, 246, 0.3)',
+                    borderRadius: '100px',
+                    padding: '4px 12px',
+                    transition: 'all 0.2s',
+                    boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.borderColor = 'var(--accent-primary)';
+                    e.currentTarget.style.background = 'rgba(139, 92, 246, 0.12)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.3)';
+                    e.currentTarget.style.background = 'rgba(139, 92, 246, 0.08)';
+                  }}
+                  >
+                    <Clock size={12} style={{ color: 'var(--accent-primary)' }} />
+                    <span style={{ fontSize: 11, color: 'var(--accent-primary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' }}>Time:</span>
+                    <input
+                      type="text"
+                      value={form.timeComplexity}
+                      onChange={(e) => setForm({ ...form, timeComplexity: e.target.value })}
+                      placeholder="e.g. O(n)"
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'var(--text-primary)',
+                        padding: 0,
+                        fontSize: 12,
+                        fontWeight: 600,
+                        width: '80px',
+                        outline: 'none',
+                      }}
+                    />
+                  </div>
+
+                  {/* Space Capsule */}
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    background: 'rgba(59, 130, 246, 0.08)',
+                    border: '1px solid rgba(59, 130, 246, 0.3)',
+                    borderRadius: '100px',
+                    padding: '4px 12px',
+                    transition: 'all 0.2s',
+                    boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.borderColor = 'var(--accent-secondary)';
+                    e.currentTarget.style.background = 'rgba(59, 130, 246, 0.12)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.borderColor = 'rgba(59, 130, 246, 0.3)';
+                    e.currentTarget.style.background = 'rgba(59, 130, 246, 0.08)';
+                  }}
+                  >
+                    <Layers size={12} style={{ color: 'var(--accent-secondary)' }} />
+                    <span style={{ fontSize: 11, color: 'var(--accent-secondary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' }}>Space:</span>
+                    <input
+                      type="text"
+                      value={form.spaceComplexity}
+                      onChange={(e) => setForm({ ...form, spaceComplexity: e.target.value })}
+                      placeholder="e.g. O(1)"
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'var(--text-primary)',
+                        padding: 0,
+                        fontSize: 12,
+                        fontWeight: 600,
+                        width: '80px',
+                        outline: 'none',
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Markdown editor area / Google Drive Embedder */}
@@ -531,7 +822,193 @@ export default function NotesModal({ question, onClose, isConcept = false, conce
               }}
             >
               {activeTab === 'googleDrive' ? (
-                !isAuthorized && !form.googleDriveUrl ? (
+                currentPeerUid ? (
+                  !form.googleDriveUrl ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-tertiary)', padding: '40px 20px', flex: 1 }}>
+                      <FolderOpen size={36} style={{ color: 'var(--text-tertiary)', marginBottom: '12px', opacity: 0.5 }} />
+                      <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>No Drive folder linked</span>
+                      <span style={{ fontSize: '11px', marginTop: '4px', textAlign: 'center' }}>This peer hasn't linked a Google Drive folder or document to this note.</span>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, height: '100%' }}>
+                      {/* Header toolbar for Google Drive control */}
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '8px 16px',
+                        background: 'var(--bg-tertiary)',
+                        borderBottom: '1px solid var(--border-primary)',
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                          {selectedFile ? (
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => setSelectedFile(null)}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                padding: '2px 8px',
+                                fontSize: '11px',
+                                height: '24px',
+                                border: '1px solid var(--border-secondary)',
+                                background: 'transparent',
+                                color: 'var(--text-secondary)'
+                              }}
+                            >
+                              <ChevronLeft size={14} />
+                              Back to files
+                            </button>
+                          ) : (
+                            <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                              Peer Linked: {getDriveTypeLabel(form.googleDriveUrl)}
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                          <a
+                            href={form.googleDriveUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="btn btn-secondary btn-sm"
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              textDecoration: 'none',
+                              padding: '4px 10px',
+                              fontSize: '11px',
+                              height: '28px',
+                            }}
+                          >
+                            <ExternalLink size={12} />
+                            Open
+                          </a>
+                        </div>
+                      </div>
+
+                      {/* Main explorer/iframe */}
+                      <div style={{
+                        flex: 1,
+                        position: 'relative',
+                        background: '#14141d',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        minHeight: 0,
+                      }}>
+                        {selectedFile ? (
+                          <iframe
+                            key={selectedFile.id + iframeKey}
+                            src={getEmbeddableDriveUrl(selectedFile.webViewLink)}
+                            title="Google Drive Document Embed"
+                            width="100%"
+                            height="100%"
+                            style={{
+                              border: 'none',
+                              background: '#14141d',
+                              flex: 1,
+                            }}
+                            allow="autoplay"
+                          />
+                        ) : form.googleDriveUrl.includes('folders') && isAuthorized ? (
+                          <div style={{ padding: '16px', overflowY: 'auto', flex: 1 }}>
+                            {isLoadingFiles ? (
+                              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: '10px' }}>
+                                <RefreshCw size={24} className="spin" style={{ color: 'var(--accent-primary)', animation: 'spin 1s linear infinite' }} />
+                                <span style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>Loading folder contents...</span>
+                              </div>
+                            ) : folderFiles.length === 0 ? (
+                              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-tertiary)', padding: '20px' }}>
+                                <FolderOpen size={36} style={{ color: 'var(--text-tertiary)', marginBottom: '12px', opacity: 0.5 }} />
+                                <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>This folder is empty</span>
+                              </div>
+                            ) : (
+                              <div style={{
+                                display: 'grid',
+                                gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))',
+                                gap: '12px',
+                              }}>
+                                {folderFiles.map((file) => {
+                                  let FileIcon = File;
+                                  let iconColor = 'var(--text-secondary)';
+                                  if (file.mimeType.includes('document')) {
+                                    FileIcon = FileText;
+                                    iconColor = '#4285F4';
+                                  } else if (file.mimeType.includes('spreadsheet')) {
+                                    FileIcon = FileSpreadsheet;
+                                    iconColor = '#0F9D58';
+                                  } else if (file.mimeType.includes('presentation')) {
+                                    FileIcon = FileCode;
+                                    iconColor = '#F4B400';
+                                  } else if (file.mimeType === 'application/pdf') {
+                                    FileIcon = FileText;
+                                    iconColor = '#DB4437';
+                                  } else if (file.mimeType.startsWith('image/')) {
+                                    FileIcon = FileImage;
+                                    iconColor = '#FF7043';
+                                  }
+                                  return (
+                                    <div
+                                      key={file.id}
+                                      onClick={() => setSelectedFile(file)}
+                                      style={{
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        alignItems: 'center',
+                                        padding: '12px 8px',
+                                        background: 'var(--bg-tertiary)',
+                                        border: '1px solid var(--border-primary)',
+                                        borderRadius: 'var(--radius-md)',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.2s',
+                                        textAlign: 'center',
+                                        height: '100px',
+                                        justifyContent: 'space-between',
+                                      }}
+                                    >
+                                      <FileIcon size={32} style={{ color: iconColor, marginBottom: '6px' }} />
+                                      <span
+                                        title={file.name}
+                                        style={{
+                                          fontSize: '11px',
+                                          fontWeight: 500,
+                                          color: 'var(--text-primary)',
+                                          width: '100%',
+                                          overflow: 'hidden',
+                                          textOverflow: 'ellipsis',
+                                          whiteSpace: 'nowrap',
+                                          padding: '0 4px',
+                                        }}
+                                      >
+                                        {file.name}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <iframe
+                            key={iframeKey}
+                            src={getEmbeddableDriveUrl(form.googleDriveUrl)}
+                            title="Google Drive Document Embed"
+                            width="100%"
+                            height="100%"
+                            style={{
+                              border: 'none',
+                              background: '#14141d',
+                              flex: 1,
+                            }}
+                            allow="autoplay"
+                          />
+                        )}
+                      </div>
+                    </div>
+                  )
+                ) : ( !isAuthorized && !form.googleDriveUrl ? (
                   /* 1. Unauthenticated Setup State */
                   <div style={{
                     display: 'flex',
@@ -1046,95 +1523,599 @@ export default function NotesModal({ question, onClose, isConcept = false, conce
                       </div>
                     </div>
                   </div>
+                ))
+              ) : activeTab === 'collab' ? (
+                /* Shared Tab content */
+                selectedPeerForView ? (
+                  <div style={{ padding: '16px', overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    {/* Header with Back button and user name */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border-primary)', paddingBottom: '12px', flexWrap: 'wrap', gap: '12px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedPeerForView(null)}
+                          className="btn btn-secondary btn-sm"
+                          style={{ display: 'flex', alignItems: 'center', gap: '4px', height: '32px', padding: '0 12px' }}
+                        >
+                          <ChevronLeft size={14} /> Back
+                        </button>
+                        <h4 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                          @{selectedPeerForView.username}'s Note
+                        </h4>
+                      </div>
+
+                      {peerForm && (
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          {/* Time Capsule */}
+                          <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            background: 'rgba(139, 92, 246, 0.08)',
+                            border: '1px solid rgba(139, 92, 246, 0.3)',
+                            borderRadius: '100px',
+                            padding: '4px 12px',
+                          }}>
+                            <Clock size={12} style={{ color: 'var(--accent-primary)' }} />
+                            <span style={{ fontSize: 11, color: 'var(--accent-primary)', fontWeight: 700, textTransform: 'uppercase' }}>Time:</span>
+                            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>
+                              {peerForm.timeComplexity || 'N/A'}
+                            </span>
+                          </div>
+
+                          {/* Space Capsule */}
+                          <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            background: 'rgba(59, 130, 246, 0.08)',
+                            border: '1px solid rgba(59, 130, 246, 0.3)',
+                            borderRadius: '100px',
+                            padding: '4px 12px',
+                          }}>
+                            <Layers size={12} style={{ color: 'var(--accent-secondary)' }} />
+                            <span style={{ fontSize: 11, color: 'var(--accent-secondary)', fontWeight: 700, textTransform: 'uppercase' }}>Space:</span>
+                            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>
+                              {peerForm.spaceComplexity || 'N/A'}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {loadingPeerNotesTab ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, padding: '40px 0', gap: '10px' }}>
+                        <RefreshCw size={24} className="spin" style={{ color: 'var(--accent-primary)', animation: 'spin 1s linear infinite' }} />
+                        <span style={{ fontSize: '13px', color: 'var(--text-tertiary)' }}>Fetching peer's notes...</span>
+                      </div>
+                    ) : peerForm ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, gap: '16px' }}>
+                        {/* Secondary Sub Tabs */}
+                        <div style={{ display: 'flex', gap: '4px', borderBottom: '1px solid var(--border-secondary)', paddingBottom: '4px' }}>
+                          {[
+                            { id: 'notes', label: 'Notes', icon: StickyNote },
+                            { id: 'details', label: 'Approach & Learnings', icon: Sparkles },
+                            { id: 'googleDrive', label: 'Google Drive', icon: FolderOpen }
+                          ].map((subTab) => {
+                            const Icon = subTab.icon;
+                            const isActive = peerActiveSubTab === subTab.id;
+                            return (
+                              <button
+                                key={subTab.id}
+                                type="button"
+                                onClick={() => setPeerActiveSubTab(subTab.id)}
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  borderBottom: isActive ? '2px solid var(--accent-primary)' : '2px solid transparent',
+                                  color: isActive ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                                  padding: '6px 12px',
+                                  fontSize: '12px',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '6px',
+                                  transition: 'all 0.15s'
+                                }}
+                              >
+                                <Icon size={12} />
+                                {subTab.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {/* Sub Tab Contents */}
+                        {peerActiveSubTab === 'notes' ? (
+                          <div
+                            className="markdown-editor-preview"
+                            style={{ flex: 1, overflowY: 'auto', padding: '16px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)' }}
+                            dangerouslySetInnerHTML={{ __html: renderMarkdown(peerForm.notes) || '<p style="color: var(--text-tertiary); font-style: italic;">No notes written...</p>' }}
+                          />
+                        ) : peerActiveSubTab === 'details' ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', flex: 1, overflowY: 'auto' }}>
+                            {!peerForm.keyIdea && !peerForm.optimalApproach && !peerForm.mistakes && !peerForm.interviewLearnings ? (
+                              <p style={{ color: 'var(--text-tertiary)', fontStyle: 'italic', textAlign: 'center', marginTop: '40px', fontSize: '13px' }}>No additional details provided by peer...</p>
+                            ) : (
+                              <>
+                                {peerForm.keyIdea && (
+                                  <div>
+                                    <h5 style={{ display: 'flex', alignItems: 'center', gap: '6px', margin: '0 0 8px 0', fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                                      <Sparkles size={14} style={{ color: 'var(--accent-primary)' }} /> Key Idea
+                                    </h5>
+                                    <div className="markdown-editor-preview" dangerouslySetInnerHTML={{ __html: renderMarkdown(peerForm.keyIdea) }} style={{ padding: '12px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)' }} />
+                                  </div>
+                                )}
+                                {peerForm.optimalApproach && (
+                                  <div>
+                                    <h5 style={{ display: 'flex', alignItems: 'center', gap: '6px', margin: '0 0 8px 0', fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                                      <Target size={14} style={{ color: 'var(--accent-primary)' }} /> Optimal Approach
+                                    </h5>
+                                    <div className="markdown-editor-preview" dangerouslySetInnerHTML={{ __html: renderMarkdown(peerForm.optimalApproach) }} style={{ padding: '12px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)' }} />
+                                  </div>
+                                )}
+                                {peerForm.mistakes && (
+                                  <div>
+                                    <h5 style={{ display: 'flex', alignItems: 'center', gap: '6px', margin: '0 0 8px 0', fontSize: '13px', fontWeight: 600, color: '#EF4444' }}>
+                                      <AlertTriangle size={14} style={{ color: '#EF4444' }} /> Mistakes to Avoid
+                                    </h5>
+                                    <div className="markdown-editor-preview" dangerouslySetInnerHTML={{ __html: renderMarkdown(peerForm.mistakes) }} style={{ padding: '12px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)' }} />
+                                  </div>
+                                )}
+                                {peerForm.interviewLearnings && (
+                                  <div>
+                                    <h5 style={{ display: 'flex', alignItems: 'center', gap: '6px', margin: '0 0 8px 0', fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                                      <Info size={14} style={{ color: 'var(--text-secondary)' }} /> Interview Learnings
+                                    </h5>
+                                    <div className="markdown-editor-preview" dangerouslySetInnerHTML={{ __html: renderMarkdown(peerForm.interviewLearnings) }} style={{ padding: '12px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)' }} />
+                                  </div>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        ) : (
+                          /* Google Drive Sub Tab */
+                          <div style={{ display: 'flex', flexDirection: 'column', flex: 1, gap: '12px' }}>
+                            {!peerForm.googleDriveUrl ? (
+                              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-tertiary)', padding: '40px 20px', flex: 1 }}>
+                                <FolderOpen size={36} style={{ color: 'var(--text-tertiary)', marginBottom: '12px', opacity: 0.5 }} />
+                                <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>No Drive folder linked</span>
+                                <span style={{ fontSize: '11px', marginTop: '4px', textAlign: 'center' }}>This peer hasn't linked a Google Drive folder or document to this note.</span>
+                              </div>
+                            ) : (
+                              <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: '300px' }}>
+                                <div style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'space-between',
+                                  padding: '8px 12px',
+                                  background: 'var(--bg-tertiary)',
+                                  border: '1px solid var(--border-primary)',
+                                  borderRadius: 'var(--radius-md) var(--radius-md) 0 0',
+                                  borderBottom: 'none',
+                                }}>
+                                  <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                                    Peer Linked: {getDriveTypeLabel(peerForm.googleDriveUrl)}
+                                  </span>
+                                  <a
+                                    href={peerForm.googleDriveUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="btn btn-secondary btn-sm"
+                                    style={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '6px',
+                                      textDecoration: 'none',
+                                      padding: '4px 10px',
+                                      fontSize: '11px',
+                                      height: '28px',
+                                    }}
+                                  >
+                                    <ExternalLink size={12} />
+                                    Open
+                                  </a>
+                                </div>
+                                <div style={{
+                                  flex: 1,
+                                  background: '#14141d',
+                                  border: '1px solid var(--border-primary)',
+                                  borderRadius: '0 0 var(--radius-md) var(--radius-md)',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  minHeight: '280px',
+                                  position: 'relative',
+                                  overflow: 'hidden'
+                                }}>
+                                  {peerSelectedFile ? (
+                                    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, height: '100%', position: 'relative' }}>
+                                      <button
+                                        type="button"
+                                        onClick={() => setPeerSelectedFile(null)}
+                                        className="btn btn-secondary btn-sm"
+                                        style={{
+                                          position: 'absolute',
+                                          top: '8px',
+                                          left: '8px',
+                                          zIndex: 10,
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          gap: '4px',
+                                          height: '24px',
+                                          padding: '0 8px',
+                                          fontSize: '10px',
+                                        }}
+                                      >
+                                        <ChevronLeft size={10} /> Back to Folder
+                                      </button>
+                                      <iframe
+                                        src={getEmbeddableDriveUrl(peerSelectedFile.webViewLink)}
+                                        title="Google Drive Document Embed"
+                                        width="100%"
+                                        height="100%"
+                                        style={{
+                                          border: 'none',
+                                          background: '#14141d',
+                                          flex: 1,
+                                          paddingTop: '40px',
+                                        }}
+                                        allow="autoplay"
+                                      />
+                                    </div>
+                                  ) : peerForm.googleDriveUrl.includes('folders') && isAuthorized ? (
+                                    /* Custom Native folder explorer for peer */
+                                    <div style={{ padding: '16px', overflowY: 'auto', flex: 1 }}>
+                                      {isLoadingPeerFiles ? (
+                                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: '10px', padding: '40px 0' }}>
+                                          <RefreshCw size={24} className="spin" style={{ color: 'var(--accent-primary)', animation: 'spin 1s linear infinite' }} />
+                                          <span style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>Loading folder contents...</span>
+                                        </div>
+                                      ) : peerFolderFiles.length === 0 ? (
+                                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-tertiary)', padding: '40px 20px' }}>
+                                          <FolderOpen size={36} style={{ color: 'var(--text-tertiary)', marginBottom: '12px', opacity: 0.5 }} />
+                                          <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>This folder is empty</span>
+                                        </div>
+                                      ) : (
+                                        <div style={{
+                                          display: 'grid',
+                                          gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))',
+                                          gap: '12px',
+                                        }}>
+                                          {peerFolderFiles.map((file) => {
+                                            let FileIcon = File;
+                                            let iconColor = 'var(--text-secondary)';
+                                            
+                                            if (file.mimeType.includes('document')) {
+                                              FileIcon = FileText;
+                                              iconColor = '#4285F4';
+                                            } else if (file.mimeType.includes('spreadsheet')) {
+                                              FileIcon = FileSpreadsheet;
+                                              iconColor = '#0F9D58';
+                                            } else if (file.mimeType.includes('presentation')) {
+                                              FileIcon = FileCode;
+                                              iconColor = '#F4B400';
+                                            } else if (file.mimeType === 'application/pdf') {
+                                              FileIcon = FileText;
+                                              iconColor = '#DB4437';
+                                            } else if (file.mimeType.startsWith('image/')) {
+                                              FileIcon = FileImage;
+                                              iconColor = '#FF7043';
+                                            }
+                                            
+                                            return (
+                                              <div
+                                                key={file.id}
+                                                onClick={() => setPeerSelectedFile(file)}
+                                                style={{
+                                                  display: 'flex',
+                                                  flexDirection: 'column',
+                                                  alignItems: 'center',
+                                                  padding: '12px 8px',
+                                                  background: 'var(--bg-tertiary)',
+                                                  border: '1px solid var(--border-primary)',
+                                                  borderRadius: 'var(--radius-md)',
+                                                  cursor: 'pointer',
+                                                  transition: 'all 0.2s',
+                                                  textAlign: 'center',
+                                                  height: '100px',
+                                                  justifyContent: 'space-between',
+                                                }}
+                                                onMouseEnter={(e) => {
+                                                  e.currentTarget.style.borderColor = 'var(--accent-primary)';
+                                                  e.currentTarget.style.transform = 'translateY(-2px)';
+                                                  e.currentTarget.style.background = 'var(--bg-card-hover)';
+                                                }}
+                                                onMouseLeave={(e) => {
+                                                  e.currentTarget.style.borderColor = 'var(--border-primary)';
+                                                  e.currentTarget.style.transform = 'none';
+                                                  e.currentTarget.style.background = 'var(--bg-tertiary)';
+                                                }}
+                                              >
+                                                <FileIcon size={32} style={{ color: iconColor, marginBottom: '6px' }} />
+                                                <span
+                                                  title={file.name}
+                                                  style={{
+                                                    fontSize: '11px',
+                                                    fontWeight: 500,
+                                                    color: 'var(--text-primary)',
+                                                    width: '100%',
+                                                    overflow: 'hidden',
+                                                    textOverflow: 'ellipsis',
+                                                    whiteSpace: 'nowrap',
+                                                    padding: '0 4px',
+                                                  }}
+                                                >
+                                                  {file.name}
+                                                </span>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    /* Fallback direct iframe preview */
+                                    <iframe
+                                      src={getEmbeddableDriveUrl(peerForm.googleDriveUrl)}
+                                      title="Google Drive Document Embed"
+                                      width="100%"
+                                      height="100%"
+                                      style={{
+                                        border: 'none',
+                                        background: '#14141d',
+                                        flex: 1,
+                                      }}
+                                      allow="autoplay"
+                                    />
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <p style={{ color: 'var(--text-tertiary)', fontStyle: 'italic', textAlign: 'center', marginTop: '40px' }}>Failed to load peer's notes.</p>
+                    )}
+                  </div>
+                ) : (
+                  <div style={{ padding: '16px', overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                    {/* Sharing Form */}
+                    <div style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-primary)', borderRadius: 'var(--radius-md)', padding: '16px' }}>
+                      <h4 style={{ margin: '0 0 12px 0', fontSize: '14px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}>
+                        <UserPlus size={16} style={{ color: 'var(--accent-primary)' }} /> Share Note with Peer
+                      </h4>
+                      <form onSubmit={handleShare} style={{ display: 'flex', gap: '10px' }}>
+                        <input
+                          type="text"
+                          placeholder="Enter recipient username"
+                          value={shareUsername}
+                          onChange={(e) => setShareUsername(e.target.value)}
+                          disabled={isSharing}
+                          style={{
+                            flex: 1,
+                            padding: '8px 12px',
+                            background: 'var(--bg-secondary)',
+                            border: '1px solid var(--border-secondary)',
+                            borderRadius: 'var(--radius-md)',
+                            color: 'var(--text-primary)',
+                            fontSize: '13px',
+                            outline: 'none',
+                          }}
+                        />
+                        <button
+                          type="submit"
+                          className="btn btn-primary"
+                          disabled={isSharing || !shareUsername.trim()}
+                          style={{ height: '36px', padding: '0 16px' }}
+                        >
+                          {isSharing ? 'Sharing...' : 'Share'}
+                        </button>
+                      </form>
+                      {shareError && <div style={{ color: '#EF4444', fontSize: '12px', marginTop: '8px' }}>{shareError}</div>}
+                      {shareSuccess && <div style={{ color: '#10B981', fontSize: '12px', marginTop: '8px' }}>{shareSuccess}</div>}
+                    </div>
+
+                    {/* Active Outbound Shares */}
+                    <div>
+                      <h4 style={{ margin: '0 0 12px 0', fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                        Active Shares
+                      </h4>
+                      {outboundShares.length === 0 ? (
+                        <p style={{ fontSize: '12px', color: 'var(--text-tertiary)', margin: 0 }}>
+                          You haven't shared this note with anyone yet.
+                        </p>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          {outboundShares.map((s) => (
+                            <div
+                              key={s.id}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                padding: '10px 12px',
+                                background: 'var(--bg-tertiary)',
+                                border: '1px solid var(--border-primary)',
+                                borderRadius: 'var(--radius-md)',
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                                  @{s.recipientUsername}
+                                </span>
+                                <span
+                                  style={{
+                                    fontSize: '10px',
+                                    fontWeight: 700,
+                                    textTransform: 'uppercase',
+                                    padding: '2px 6px',
+                                    borderRadius: '4px',
+                                    background: s.status === 'accepted' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(245, 158, 11, 0.1)',
+                                    color: s.status === 'accepted' ? '#10B981' : '#F59E0B',
+                                  }}
+                                >
+                                  {s.status}
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleRevokeShare(s.id)}
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: '#EF4444',
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  padding: '4px'
+                                }}
+                                title="Revoke access"
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Peer Shared Notes List */}
+                    <div>
+                      <h4 style={{ margin: '0 0 12px 0', fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                        Peers who shared notes for this topic
+                      </h4>
+                      {peerShares.length === 0 ? (
+                        <p style={{ fontSize: '12px', color: 'var(--text-tertiary)', margin: 0 }}>
+                          No peers have shared their notes for this topic with you.
+                        </p>
+                      ) : (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                          {peerShares.map((ps) => (
+                            <button
+                              key={ps.ownerUid}
+                              type="button"
+                              onClick={() => {
+                                setSelectedPeerForView({ uid: ps.ownerUid, username: ps.ownerUsername });
+                                setPeerActiveSubTab('notes');
+                              }}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                padding: '6px 12px',
+                                background: 'rgba(139, 92, 246, 0.08)',
+                                border: '1px solid rgba(139, 92, 246, 0.3)',
+                                borderRadius: '20px',
+                                color: 'var(--accent-primary)',
+                                fontSize: '12px',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                                transition: 'all 0.2s',
+                              }}
+                            >
+                              <Users size={12} />
+                              View @{ps.ownerUsername}'s Note
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 )
               ) : (
                 <>
-                  <div className="markdown-toolbar">
+                  <div className="markdown-toolbar" style={{ justifyContent: currentPeerUid ? 'flex-end' : 'space-between' }}>
+                    {!currentPeerUid && (
+                      <div className="markdown-toolbar-group">
+                        <button
+                          type="button"
+                          className="markdown-toolbar-btn"
+                          onClick={() => insertMarkdown('heading')}
+                          title="Heading"
+                        >
+                          <Heading size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          className="markdown-toolbar-btn"
+                          onClick={() => insertMarkdown('bold')}
+                          title="Bold"
+                        >
+                          <Bold size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          className="markdown-toolbar-btn"
+                          onClick={() => insertMarkdown('italic')}
+                          title="Italic"
+                        >
+                          <Italic size={14} />
+                        </button>
+                        <div style={{ width: 1, height: 16, background: 'var(--border-primary)', margin: '0 4px' }} />
+                        <button
+                          type="button"
+                          className="markdown-toolbar-btn"
+                          onClick={() => insertMarkdown('ul')}
+                          title="Unordered List"
+                        >
+                          <List size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          className="markdown-toolbar-btn"
+                          onClick={() => insertMarkdown('ol')}
+                          title="Ordered List"
+                        >
+                          <ListOrdered size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          className="markdown-toolbar-btn"
+                          onClick={() => insertMarkdown('quote')}
+                          title="Blockquote"
+                        >
+                          <Quote size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          className="markdown-toolbar-btn"
+                          onClick={() => insertMarkdown('code')}
+                          title="Code Block"
+                        >
+                          <Code size={14} />
+                        </button>
+                        <div style={{ width: 1, height: 16, background: 'var(--border-primary)', margin: '0 4px' }} />
+                        <button
+                          type="button"
+                          className="markdown-toolbar-btn"
+                          onClick={() => insertMarkdown('link')}
+                          title="Link"
+                        >
+                          <Link size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          className="markdown-toolbar-btn"
+                          onClick={() => insertMarkdown('image')}
+                          title="Image"
+                        >
+                          <Image size={14} />
+                        </button>
+                      </div>
+                    )}
                     <div className="markdown-toolbar-group">
-                      <button
-                        type="button"
-                        className="markdown-toolbar-btn"
-                        onClick={() => insertMarkdown('heading')}
-                        title="Heading"
-                      >
-                        <Heading size={14} />
-                      </button>
-                      <button
-                        type="button"
-                        className="markdown-toolbar-btn"
-                        onClick={() => insertMarkdown('bold')}
-                        title="Bold"
-                      >
-                        <Bold size={14} />
-                      </button>
-                      <button
-                        type="button"
-                        className="markdown-toolbar-btn"
-                        onClick={() => insertMarkdown('italic')}
-                        title="Italic"
-                      >
-                        <Italic size={14} />
-                      </button>
-                      <div style={{ width: 1, height: 16, background: 'var(--border-primary)', margin: '0 4px' }} />
-                      <button
-                        type="button"
-                        className="markdown-toolbar-btn"
-                        onClick={() => insertMarkdown('ul')}
-                        title="Unordered List"
-                      >
-                        <List size={14} />
-                      </button>
-                      <button
-                        type="button"
-                        className="markdown-toolbar-btn"
-                        onClick={() => insertMarkdown('ol')}
-                        title="Ordered List"
-                      >
-                        <ListOrdered size={14} />
-                      </button>
-                      <button
-                        type="button"
-                        className="markdown-toolbar-btn"
-                        onClick={() => insertMarkdown('quote')}
-                        title="Blockquote"
-                      >
-                        <Quote size={14} />
-                      </button>
-                      <button
-                        type="button"
-                        className="markdown-toolbar-btn"
-                        onClick={() => insertMarkdown('code')}
-                        title="Code Block"
-                      >
-                        <Code size={14} />
-                      </button>
-                      <div style={{ width: 1, height: 16, background: 'var(--border-primary)', margin: '0 4px' }} />
-                      <button
-                        type="button"
-                        className="markdown-toolbar-btn"
-                        onClick={() => insertMarkdown('link')}
-                        title="Link"
-                      >
-                        <Link size={14} />
-                      </button>
-                      <button
-                        type="button"
-                        className="markdown-toolbar-btn"
-                        onClick={() => insertMarkdown('image')}
-                        title="Image"
-                      >
-                        <Image size={14} />
-                      </button>
-                    </div>
-                    <div className="markdown-toolbar-group">
-                      <button
-                        type="button"
-                        className={`markdown-toolbar-btn ${isPreview ? 'active' : ''}`}
-                        onClick={() => setIsPreview(!isPreview)}
-                        title={isPreview ? "Show Editor" : "Show Preview"}
-                      >
-                        <Eye size={14} />
-                      </button>
+                      {!currentPeerUid && (
+                        <button
+                          type="button"
+                          className={`markdown-toolbar-btn ${isPreview ? 'active' : ''}`}
+                          onClick={() => setIsPreview(!isPreview)}
+                          title={isPreview ? "Show Editor" : "Show Preview"}
+                        >
+                          <Eye size={14} />
+                        </button>
+                      )}
                       <button
                         type="button"
                         className={`markdown-toolbar-btn ${isMaximized ? 'active' : ''}`}
@@ -1159,50 +2140,58 @@ export default function NotesModal({ question, onClose, isConcept = false, conce
                       placeholder={`Type here...(Markdown is enabled for ${activeTab})`}
                       className="markdown-editor-textarea"
                       rows={10}
+                      readOnly={!!currentPeerUid}
                     />
                   )}
                 </>
               )}
             </div>
           </div>
-        </div>
+        )}
+      </div>
 
         <div className="modal-footer" style={{ gap: '10px' }}>
-          {activeTab === 'googleDrive' && isAuthorized && form.googleDriveUrl && form.googleDriveUrl.includes('folders') && (
-            <button
-              type="button"
-              className="btn"
-              onClick={() => setShowUploadPanel(true)}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: '0 16px',
-                height: '38px',
-                borderRadius: 'var(--radius-md)',
-                border: '1px solid rgba(139, 92, 246, 0.4)',
-                color: 'var(--accent-primary)',
-                background: 'rgba(139, 92, 246, 0.03)',
-                fontWeight: 600,
-                fontSize: '13px',
-                cursor: 'pointer',
-                transition: 'all 0.2s',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = 'rgba(139, 92, 246, 0.08)';
-                e.currentTarget.style.borderColor = 'var(--accent-primary)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = 'rgba(139, 92, 246, 0.03)';
-                e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.4)';
-              }}
-            >
-              <CloudUpload size={16} />
-              Upload Files
-            </button>
+          {currentPeerUid ? (
+            <button className="btn btn-primary" onClick={onClose}>Close</button>
+          ) : (
+            <>
+              {activeTab === 'googleDrive' && isAuthorized && form.googleDriveUrl && form.googleDriveUrl.includes('folders') && (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => setShowUploadPanel(true)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '0 16px',
+                    height: '38px',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid rgba(139, 92, 246, 0.4)',
+                    color: 'var(--accent-primary)',
+                    background: 'rgba(139, 92, 246, 0.03)',
+                    fontWeight: 600,
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = 'rgba(139, 92, 246, 0.08)';
+                    e.currentTarget.style.borderColor = 'var(--accent-primary)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'rgba(139, 92, 246, 0.03)';
+                    e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.4)';
+                  }}
+                >
+                  <CloudUpload size={16} />
+                  Upload Files
+                </button>
+              )}
+              <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleSave}>Save Notes</button>
+            </>
           )}
-          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" onClick={handleSave}>Save Notes</button>
         </div>
 
         {/* Upload Overlay */}

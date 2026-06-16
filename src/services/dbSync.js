@@ -125,15 +125,18 @@ export function initDbSync(onStatusChange) {
     const allKeys = [...new Set([...Object.keys(notes), ...Object.keys(prevNotes)])];
     for (const qId of allKeys) {
       const numId = parseInt(qId);
-      if (isNaN(numId)) continue;
-      const noteData = notes[numId];
-      const prevNoteData = prevNotes[numId];
+      const isConceptKey = typeof qId === 'string' && qId.startsWith('concept_');
+      if (isNaN(numId) && !isConceptKey) continue;
+      
+      const noteData = notes[qId];
+      const prevNoteData = prevNotes[qId];
 
       if (JSON.stringify(noteData) !== JSON.stringify(prevNoteData)) {
-        const docId = `${authUser.uid}_${numId}`;
+        const docId = `${authUser.uid}_${qId}`;
         await setDoc(doc(db, 'user_notes', docId), {
           uid: authUser.uid,
-          questionId: numId,
+          questionId: isConceptKey ? null : numId,
+          conceptId: isConceptKey ? qId : null,
           keyIdea: noteData?.keyIdea || '',
           mistakes: noteData?.mistakes || '',
           optimalApproach: noteData?.optimalApproach || '',
@@ -404,7 +407,10 @@ async function hydrateFromCloud(user) {
     // Hydrate notes
     notesSnap.forEach(docSnap => {
       const row = docSnap.data();
-      notesStoreState.profiles['default'][row.questionId] = {
+      const noteKey = row.questionId || row.conceptId;
+      if (!noteKey) return;
+      
+      notesStoreState.profiles['default'][noteKey] = {
         keyIdea: row.keyIdea || '',
         mistakes: row.mistakes || '',
         optimalApproach: row.optimalApproach || '',

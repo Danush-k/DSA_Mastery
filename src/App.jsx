@@ -30,6 +30,7 @@ const BookmarksPage = lazy(() => import('./pages/BookmarksPage.jsx'));
 const LoginPage = lazy(() => import('./pages/LoginPage.jsx'));
 const VerifyEmailPage = lazy(() => import('./pages/VerifyEmailPage.jsx'));
 const ProfilePage = lazy(() => import('./pages/ProfilePage.jsx'));
+const SharedNotesPage = lazy(() => import('./pages/SharedNotesPage.jsx'));
 
 function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -114,6 +115,7 @@ function AppLayout() {
     if (location.pathname.startsWith('/patterns/')) return 'Pattern Detail';
     if (location.pathname === '/revision') return 'Revision';
     if (location.pathname === '/bookmarks') return 'Bookmarks';
+    if (location.pathname === '/shared-notes') return 'Shared Notes';
     if (location.pathname === '/login') return 'Account Login';
     if (location.pathname === '/profile') return 'User Profile';
     if (location.pathname === '/verify-email') return 'Email Verification';
@@ -240,6 +242,7 @@ function AppLayout() {
               <Route path="/patterns/:patternId" element={<PatternDetailPage />} />
               <Route path="/revision" element={<RevisionPage />} />
               <Route path="/bookmarks" element={<BookmarksPage />} />
+              <Route path="/shared-notes" element={<SharedNotesPage />} />
               <Route path="/profile" element={<ProfilePage user={user} syncStatus={syncStatus} onLogout={handleLogoutGlobal} />} />
               <Route path="*" element={<DashboardPage />} />
             </Routes>

@@ -149,6 +149,7 @@ export default function NotesModal({ question, onClose, isConcept = false, conce
   const [shareSuccess, setShareSuccess] = useState(null);
   const [outboundShares, setOutboundShares] = useState([]);
   const [peerShares, setPeerShares] = useState([]);
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
 
   // Real-time listener for outbound shares
   useEffect(() => {
@@ -180,7 +181,7 @@ export default function NotesModal({ question, onClose, isConcept = false, conce
     const unsub = onSnapshot(q, (snap) => {
       const list = [];
       snap.forEach((docSnap) => {
-        list.push(docSnap.data());
+        list.push({ id: docSnap.id, ...docSnap.data() });
       });
       setPeerShares(list);
     });
@@ -263,6 +264,33 @@ export default function NotesModal({ question, onClose, isConcept = false, conce
       await deleteDoc(shareRef);
     } catch (err) {
       console.error("Failed to revoke share:", err);
+    }
+  };
+
+  const handleDeleteShare = async (shareId, isCurrentPeer = false) => {
+    try {
+      const shareRef = doc(db, 'shared_notes_access', shareId);
+      await deleteDoc(shareRef);
+      if (isCurrentPeer) {
+        // Switch back to My Notes
+        setCurrentPeerUid(null);
+        setCurrentPeerUsername(null);
+        setForm({
+          keyIdea: existing.keyIdea || '',
+          mistakes: existing.mistakes || '',
+          optimalApproach: existing.optimalApproach || '',
+          timeComplexity: existing.timeComplexity || '',
+          spaceComplexity: existing.spaceComplexity || '',
+          notes: existing.notes || '',
+          interviewLearnings: existing.interviewLearnings || '',
+          googleDriveUrl: existing.googleDriveUrl || '',
+        });
+        setUrlInput(existing.googleDriveUrl || '');
+        setIsPreview(false);
+        setActiveTab('notes');
+      }
+    } catch (err) {
+      console.error("Failed to delete share:", err);
     }
   };
 
@@ -1625,7 +1653,7 @@ export default function NotesModal({ question, onClose, isConcept = false, conce
                             </div>
                             <button
                               type="button"
-                              onClick={() => handleRevokeShare(s.id)}
+                              onClick={() => setDeleteConfirm({ type: 'outbound', id: s.id, name: s.recipientUsername })}
                               style={{
                                 background: 'transparent',
                                 border: 'none',
@@ -1655,35 +1683,69 @@ export default function NotesModal({ question, onClose, isConcept = false, conce
                         No peers have shared their notes for this topic with you.
                       </p>
                     ) : (
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                         {peerShares.map((ps) => (
-                          <button
+                          <div
                             key={ps.ownerUid}
-                            type="button"
-                            onClick={() => {
-                              setCurrentPeerUid(ps.ownerUid);
-                              setCurrentPeerUsername(ps.ownerUsername);
-                              setIsPreview(true);
-                              setActiveTab('notes');
-                            }}
                             style={{
                               display: 'flex',
                               alignItems: 'center',
-                              gap: '6px',
-                              padding: '6px 12px',
-                              background: 'rgba(139, 92, 246, 0.08)',
-                              border: '1px solid rgba(139, 92, 246, 0.3)',
-                              borderRadius: '20px',
-                              color: 'var(--accent-primary)',
-                              fontSize: '12px',
-                              fontWeight: 600,
-                              cursor: 'pointer',
-                              transition: 'all 0.2s',
+                              justifyContent: 'space-between',
+                              padding: '10px 12px',
+                              background: 'var(--bg-tertiary)',
+                              border: '1px solid var(--border-primary)',
+                              borderRadius: 'var(--radius-md)',
                             }}
                           >
-                            <Users size={12} />
-                            View @{ps.ownerUsername}'s Note
-                          </button>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                                @{ps.ownerUsername}
+                              </span>
+                            </div>
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setCurrentPeerUid(ps.ownerUid);
+                                  setCurrentPeerUsername(ps.ownerUsername);
+                                  setIsPreview(true);
+                                  setActiveTab('notes');
+                                }}
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '6px',
+                                  padding: '6px 12px',
+                                  background: 'rgba(139, 92, 246, 0.08)',
+                                  border: '1px solid rgba(139, 92, 246, 0.3)',
+                                  borderRadius: '20px',
+                                  color: 'var(--accent-primary)',
+                                  fontSize: '12px',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                <Users size={12} />
+                                View Note
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setDeleteConfirm({ type: 'inbound', id: ps.id, name: ps.ownerUsername, isCurrent: currentPeerUid === ps.ownerUid })}
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: '#EF4444',
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  padding: '4px'
+                                }}
+                                title="Delete shared note"
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            </div>
+                          </div>
                         ))}
                       </div>
                     )}
@@ -2035,6 +2097,115 @@ export default function NotesModal({ question, onClose, isConcept = false, conce
               >
                 Done
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* Delete Confirmation Overlay */}
+        {deleteConfirm && (
+          <div 
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              background: 'rgba(10, 10, 15, 0.75)',
+              backdropFilter: 'blur(12px)',
+              WebkitBackdropFilter: 'blur(12px)',
+              zIndex: 110,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '32px',
+              borderRadius: 'var(--radius-xl)',
+              animation: 'fadeIn 0.2s ease-out',
+            }}
+            onClick={() => setDeleteConfirm(null)}
+          >
+            <div 
+              style={{
+                background: 'var(--bg-secondary)',
+                border: '1px solid var(--border-primary)',
+                borderRadius: '12px',
+                padding: '24px',
+                width: '100%',
+                maxWidth: '400px',
+                boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.5)',
+                display: 'flex',
+                flexDirection: 'column',
+                position: 'relative',
+                gap: '16px',
+                textAlign: 'center'
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{
+                width: '48px',
+                height: '48px',
+                borderRadius: '50%',
+                background: 'rgba(239, 68, 68, 0.08)',
+                border: '1px solid rgba(239, 68, 68, 0.25)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                margin: '0 auto',
+                color: '#EF4444'
+              }}>
+                <Trash2 size={24} />
+              </div>
+
+              <div>
+                <h4 style={{ margin: '0 0 8px 0', fontSize: '16px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                  {deleteConfirm.type === 'outbound' ? 'Revoke Note Access' : 'Delete Shared Note'}
+                </h4>
+                <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                  {deleteConfirm.type === 'outbound' 
+                    ? `Are you sure you want to stop sharing this note with @${deleteConfirm.name}? They will no longer be able to view it.`
+                    : `Are you sure you want to remove @${deleteConfirm.name}'s note from your list? You will lose access to view it.`
+                  }
+                </p>
+              </div>
+
+              <div style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setDeleteConfirm(null)}
+                  style={{ flex: 1, height: '38px', fontWeight: 600 }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={async () => {
+                    if (deleteConfirm.type === 'outbound') {
+                      await handleRevokeShare(deleteConfirm.id);
+                    } else {
+                      await handleDeleteShare(deleteConfirm.id, deleteConfirm.isCurrent);
+                    }
+                    setDeleteConfirm(null);
+                  }}
+                  style={{ 
+                    flex: 1, 
+                    height: '38px', 
+                    fontWeight: 600,
+                    background: '#EF4444',
+                    color: '#ffffff',
+                    border: 'none',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = '#DC2626';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = '#EF4444';
+                  }}
+                >
+                  Confirm
+                </button>
+              </div>
             </div>
           </div>
         )}

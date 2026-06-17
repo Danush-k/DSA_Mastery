@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { auth, db } from '../firebaseClient.js';
 import { onAuthStateChanged } from 'firebase/auth';
 import { collection, query, where, getDocs, doc, updateDoc, deleteDoc } from 'firebase/firestore';
-import { Users, Check, X, FileText, AlertCircle, Calendar, Share2 } from 'lucide-react';
+import { Users, Check, X, FileText, AlertCircle, Calendar, Share2, Trash2 } from 'lucide-react';
 import NotesModal from '../components/modals/NotesModal.jsx';
 
 export default function SharedNotesPage() {
@@ -10,6 +10,7 @@ export default function SharedNotesPage() {
   const [shares, setShares] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeNote, setActiveNote] = useState(null);
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
@@ -189,38 +190,56 @@ export default function SharedNotesPage() {
                       Shared by <strong style={{ color: 'var(--text-primary)' }}>{share.ownerUsername}</strong> ({share.topicName || 'General'})
                     </div>
                   </div>
-                  <button
-                    className="btn btn-secondary"
-                    onClick={() => {
-                      if (share.isConcept) {
-                        setActiveNote({
-                          isConcept: true,
-                          concept: {
-                            patternId: share.noteId.replace('concept_', ''),
-                            patternName: share.title,
-                            topicName: share.topicName || 'General',
-                          },
-                          ownerUid: share.ownerUid,
-                          ownerUsername: share.ownerUsername
-                        });
-                      } else {
-                        setActiveNote({
-                          isConcept: false,
-                          question: {
-                            id: parseInt(share.noteId),
-                            num: share.questionNum,
-                            title: share.title,
-                            topic: share.topicName,
-                          },
-                          ownerUid: share.ownerUid,
-                          ownerUsername: share.ownerUsername
-                        });
-                      }
-                    }}
-                    style={{ height: '36px', padding: '0 16px', fontSize: '13px' }}
-                  >
-                    View Notes
-                  </button>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <button
+                      className="btn btn-secondary"
+                      onClick={() => {
+                        if (share.isConcept) {
+                          setActiveNote({
+                            isConcept: true,
+                            concept: {
+                              patternId: share.noteId.replace('concept_', ''),
+                              patternName: share.title,
+                              topicName: share.topicName || 'General',
+                            },
+                            ownerUid: share.ownerUid,
+                            ownerUsername: share.ownerUsername
+                          });
+                        } else {
+                          setActiveNote({
+                            isConcept: false,
+                            question: {
+                              id: parseInt(share.noteId),
+                              num: share.questionNum,
+                              title: share.title,
+                              topic: share.topicName,
+                            },
+                            ownerUid: share.ownerUid,
+                            ownerUsername: share.ownerUsername
+                          });
+                        }
+                      }}
+                      style={{ height: '36px', padding: '0 16px', fontSize: '13px' }}
+                    >
+                      View Notes
+                    </button>
+                    <button
+                      className="btn btn-secondary"
+                      onClick={() => setDeleteConfirm(share)}
+                      style={{ 
+                        height: '36px', 
+                        padding: '0 10px', 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        justifyContent: 'center',
+                        color: '#EF4444', 
+                        borderColor: 'rgba(239, 68, 68, 0.2)' 
+                      }}
+                      title="Delete shared note"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -237,6 +256,106 @@ export default function SharedNotesPage() {
           peerOwnerUsername={activeNote.ownerUsername}
           onClose={() => setActiveNote(null)}
         />
+      )}
+
+      {/* Delete Confirmation Overlay */}
+      {deleteConfirm && (
+        <div 
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(10, 10, 15, 0.75)',
+            backdropFilter: 'blur(12px)',
+            WebkitBackdropFilter: 'blur(12px)',
+            zIndex: 1000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '20px',
+            animation: 'fadeIn 0.2s ease-out',
+          }}
+          onClick={() => setDeleteConfirm(null)}
+        >
+          <div 
+            style={{
+              background: 'var(--bg-secondary)',
+              border: '1px solid var(--border-primary)',
+              borderRadius: '12px',
+              padding: '24px',
+              width: '100%',
+              maxWidth: '400px',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.5)',
+              display: 'flex',
+              flexDirection: 'column',
+              position: 'relative',
+              gap: '16px',
+              textAlign: 'center'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{
+              width: '48px',
+              height: '48px',
+              borderRadius: '50%',
+              background: 'rgba(239, 68, 68, 0.08)',
+              border: '1px solid rgba(239, 68, 68, 0.25)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              margin: '0 auto',
+              color: '#EF4444'
+            }}>
+              <Trash2 size={24} />
+            </div>
+
+            <div>
+              <h4 style={{ margin: '0 0 8px 0', fontSize: '16px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                Delete Shared Note
+              </h4>
+              <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                Are you sure you want to remove @{deleteConfirm.ownerUsername}'s shared note from your list? You will lose access to view it.
+              </p>
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setDeleteConfirm(null)}
+                style={{ flex: 1, height: '38px', fontWeight: 600 }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn"
+                onClick={async () => {
+                  await handleDecline(deleteConfirm);
+                  setDeleteConfirm(null);
+                }}
+                style={{ 
+                  flex: 1, 
+                  height: '38px', 
+                  fontWeight: 600,
+                  background: '#EF4444',
+                  color: '#ffffff',
+                  border: 'none',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = '#DC2626';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = '#EF4444';
+                }}
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
